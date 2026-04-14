@@ -1,0 +1,3 @@
+include README.md
+include LICENSE
+recursive-include src/feature_sql_tool *.py
