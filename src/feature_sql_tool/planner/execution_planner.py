@@ -46,7 +46,7 @@ class QueryShape:
         )
 
 
-class ExecutionPlannerV2:
+class ExecutionPlanner:
     def __init__(self) -> None:
         self.sql_parser = SqlParser()
         self.normalizer = AstNormalizer()
@@ -81,7 +81,7 @@ class ExecutionPlannerV2:
             entity_sql = self._build_entity_sql(request.entity_key, list(dict.fromkeys(plan.feature_to_step_name.values())))
             plan.entity_step = ExecutionStep(step_name='entity_base', sql=entity_sql, step_type='entity')
 
-        plan.final_step = ExecutionStep(step_name='final_select', sql='-- rendered by UnifiedSqlBuilderV2', step_type='final_select')
+        plan.final_step = ExecutionStep(step_name='final_select', sql='-- rendered by UnifiedSqlBuilder', step_type='final_select')
         return plan
 
     def _shape_from_result(self, result: FeatureLineageResult) -> QueryShape:

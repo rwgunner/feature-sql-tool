@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from feature_sql_tool import FeatureSpec, FeatureSqlToolV2, VectorBuildRequest
+from feature_sql_tool import FeatureSpec, FeatureSqlTool, VectorBuildRequest
 
 
 def test_smoke_build_sql() -> None:
@@ -23,7 +23,7 @@ def test_smoke_build_sql() -> None:
             grain="client_id",
         ),
     ]
-    tool = FeatureSqlToolV2()
+    tool = FeatureSqlTool()
     request = VectorBuildRequest(features=features, entity_key="client_id")
     sql = tool.build_unified_sql(request)
     assert "WITH" in sql

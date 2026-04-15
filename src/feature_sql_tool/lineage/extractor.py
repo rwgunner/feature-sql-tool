@@ -14,7 +14,7 @@ from feature_sql_tool.parser.ast_normalizer import AstNormalizer
 from feature_sql_tool.parser.sql_parser import SqlParser
 
 
-class FeatureLineageExtractorV2:
+class FeatureLineageExtractor:
     def __init__(self) -> None:
         self.sql_parser = SqlParser()
         self.expander = ExpressionExpander()

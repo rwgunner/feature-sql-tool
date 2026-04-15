@@ -1,20 +1,20 @@
 from __future__ import annotations
 
-from feature_sql_tool.generator.unified_sql_builder_v2 import UnifiedSqlBuilderV2
+from feature_sql_tool.generator.unified_sql_builder import UnifiedSqlBuilder
 from feature_sql_tool.graph.unified_graph_builder import UnifiedFeatureGraphBuilder
-from feature_sql_tool.lineage.extractor_v2 import FeatureLineageExtractorV2
+from feature_sql_tool.lineage.extractor import FeatureLineageExtractor
 from feature_sql_tool.models.vector_build_request import VectorBuildRequest
-from feature_sql_tool.planner.execution_planner_v2 import ExecutionPlannerV2
+from feature_sql_tool.planner.execution_planner import ExecutionPlanner
 from feature_sql_tool.planner.reusable_subgraph_detector import ReusableSubgraphDetector
 from feature_sql_tool.reporting.optimization_reporter import OptimizationReporter
 
 
-class FeatureSqlToolV2:
+class FeatureSqlTool:
     def __init__(self) -> None:
-        self.extractor = FeatureLineageExtractorV2()
+        self.extractor = FeatureLineageExtractor()
         self.unified_builder = UnifiedFeatureGraphBuilder()
-        self.planner = ExecutionPlannerV2()
-        self.sql_builder = UnifiedSqlBuilderV2()
+        self.planner = ExecutionPlanner()
+        self.sql_builder = UnifiedSqlBuilder()
         self.reusable_detector = ReusableSubgraphDetector()
         self.optimization_reporter = OptimizationReporter()
 

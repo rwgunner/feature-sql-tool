@@ -6,7 +6,7 @@ from feature_sql_tool.models.execution_plan import ExecutionPlan
 from feature_sql_tool.models.vector_build_request import VectorBuildRequest
 
 
-class UnifiedSqlBuilderV2:
+class UnifiedSqlBuilder:
     def __init__(self) -> None:
         self.cte_renderer = CteRenderer()
         self.final_renderer = FinalSelectRenderer()
