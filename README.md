@@ -1,6 +1,6 @@
 # feature-sql-tool
 
-Updated iteration of `feature-sql-tool` focused on:
+Current implementation of `feature-sql-tool` focused on:
 
 - recursive column resolution through CTEs and scope aliases
 - computed-vs-passthrough alias classification
@@ -11,7 +11,7 @@ Updated iteration of `feature-sql-tool` focused on:
 
 ## Current scope
 
-This package is an updated implementation scaffold with working core logic for:
+This package is a practical implementation scaffold with working core logic for:
 
 - scope parsing
 - recursive lineage for one feature
