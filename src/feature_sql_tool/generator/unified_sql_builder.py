@@ -1,55 +1,25 @@
 from __future__ import annotations
 
-from typing import Iterable
-
+from feature_sql_tool.generator.cte_renderer import CteRenderer
+from feature_sql_tool.generator.final_select_renderer import FinalSelectRenderer
 from feature_sql_tool.models.execution_plan import ExecutionPlan
-from feature_sql_tool.models.feature_spec import FeatureSpec
+from feature_sql_tool.models.vector_build_request import VectorBuildRequest
 
 
-class UnifiedSqlBuilder:
-    """
-    Simplest version:
-    - each feature becomes a CTE
-    - final SELECT is assembled with LEFT JOINs on entity_key
-    """
+class UnifiedSqlBuilderV2:
+    def __init__(self) -> None:
+        self.cte_renderer = CteRenderer()
+        self.final_renderer = FinalSelectRenderer()
 
-    def build(self, feature_specs: Iterable[FeatureSpec], plan: ExecutionPlan) -> str:
-        specs = list(feature_specs)
-        if not specs:
-            raise ValueError("No feature specs provided.")
-
-        entity_key = specs[0].entity_key
-
-        cte_blocks = []
-        for spec in specs:
-            feature_steps = plan.feature_steps.get(spec.feature_name, [])
-            if not feature_steps:
-                continue
-            step = feature_steps[0]
-            cte_blocks.append(f"{spec.feature_name}__cte AS (\n{step.sql}\n)")
-
-        with_clause = "WITH\n" + ",\n".join(cte_blocks)
-
-        base_feature = specs[0]
-        select_parts = [f"base.{entity_key}"]
-        from_clause = f"FROM {base_feature.feature_name}__cte base"
-
-        join_parts = []
-        for spec in specs:
-            alias = spec.feature_name
-            if spec.feature_name == base_feature.feature_name:
-                select_parts.append(f"base.{spec.final_alias} AS {spec.feature_name}")
-                continue
-
-            join_parts.append(
-                f"LEFT JOIN {alias}__cte {alias} ON base.{entity_key} = {alias}.{entity_key}"
-            )
-            select_parts.append(f"{alias}.{spec.final_alias} AS {spec.feature_name}")
-
-        final_sql = (
-            f"{with_clause}\n"
-            f"SELECT\n    " + ",\n    ".join(select_parts) + "\n"
-            f"{from_clause}\n"
-            + ("\n".join(join_parts) if join_parts else "")
-        )
-        return final_sql
+    def build(self, request: VectorBuildRequest, plan: ExecutionPlan) -> str:
+        ctes: list[str] = []
+        for step in plan.base_steps + plan.reusable_steps + plan.aggregate_steps:
+            ctes.append(self.cte_renderer.render(step))
+        for feature in request.features:
+            for step in plan.feature_steps.get(feature.feature_name, []):
+                ctes.append(self.cte_renderer.render(step))
+        if plan.entity_step is not None:
+            ctes.append(self.cte_renderer.render(plan.entity_step))
+        with_clause = "WITH\n" + ",\n".join(ctes) if ctes else ""
+        final_sql = self.final_renderer.render(request, plan)
+        return f"{with_clause}\n{final_sql}" if with_clause else final_sql
