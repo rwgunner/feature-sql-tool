@@ -1,3 +1,4 @@
 include README.md
-include LICENSE
-recursive-include src/feature_sql_tool *.py
+recursive-include src *.py
+recursive-include sql_samples *.sql
+recursive-include tests *.py
