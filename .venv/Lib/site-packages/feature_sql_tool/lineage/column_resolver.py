@@ -93,7 +93,7 @@ class ColumnResolver:
 
     def _resolve_alias_expression(self, scope_name, alias_ref, visited: Set[Tuple[str, str, str | None]]) -> ColumnResolutionResult:
         if alias_ref.is_passthrough and alias_ref.passthrough_column is not None:
-            return self._resolve_column(scope_name, alias_ref.passthrough_column.copy(), visited)
+            return self._resolve_passthrough_alias(scope_name, alias_ref.passthrough_column.copy(), visited)
 
         node_id = f"int:{scope_name}:{alias_ref.alias_name}"
         intermediate = DependencyNode(
@@ -123,6 +123,30 @@ class ColumnResolver:
                     )
                 )
         return result
+
+    def _resolve_passthrough_alias(self, scope_name: str, passthrough_column: exp.Column, visited: Set[Tuple[str, str, str | None]]) -> ColumnResolutionResult:
+        # Qualified passthrough columns can be resolved normally because they target an explicit relation.
+        if passthrough_column.table:
+            return self._resolve_column(scope_name, passthrough_column, visited)
+
+        # For unqualified passthrough columns, do not recurse into the same alias again.
+        # Instead, propagate the column through upstream relations / source scopes.
+        relations = self.scope_registry.list_relations(scope_name)
+        if len(relations) == 1:
+            relation = relations[0]
+            if relation.relation_type == 'physical_table':
+                return self._make_source(relation.physical_table_name or relation.relation_name, passthrough_column.name, scope_name)
+            if relation.source_scope_name:
+                return self._resolve_output_column(relation.source_scope_name, passthrough_column.name, visited)
+
+        candidate_results: List[ColumnResolutionResult] = []
+        for relation in relations:
+            if relation.source_scope_name:
+                candidate_results.append(self._resolve_output_column(relation.source_scope_name, passthrough_column.name, visited))
+        if len(candidate_results) == 1:
+            return candidate_results[0]
+
+        return self._make_unresolved(scope_name, passthrough_column)
 
     def _make_source(self, table_name: str, column_name: str, scope_name: str) -> ColumnResolutionResult:
         node = DependencyNode(
