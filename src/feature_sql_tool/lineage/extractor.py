@@ -74,6 +74,22 @@ class FeatureLineageExtractor:
                     )
                 )
 
+        # Include entity key and GROUP BY columns as lineage dependencies.
+        for col in self._collect_entity_and_group_columns(root_record.expression, feature_spec.entity_key):
+            resolved = resolver.resolve_column(root_scope_name, col.copy())
+            self._merge_resolution(graph, resolved)
+            for terminal_id in resolved.terminal_node_ids:
+                graph.add_edge(
+                    DependencyEdge(
+                        from_node=terminal_id,
+                        to_node=final_node_id,
+                        dependency_type='group',
+                        clause_type='group_by',
+                        scope_name=root_scope_name,
+                        expression_sql=str(col),
+                    )
+                )
+
         # Filter lineage from all relevant scopes.
         for scope_record in scope_registry.iter_scopes():
             filters = filter_collector.collect(scope_record.expression)
@@ -115,3 +131,27 @@ class FeatureLineageExtractor:
             if getattr(item, 'alias_or_name', None) == final_alias:
                 return item.this if isinstance(item, exp.Alias) else item
         return None
+
+    def _collect_entity_and_group_columns(self, expression, entity_key: str) -> list[exp.Column]:
+        columns: list[exp.Column] = []
+        seen: set[str] = set()
+
+        group_clause = expression.args.get('group') if expression is not None else None
+        if group_clause is not None:
+            for col in group_clause.find_all(exp.Column):
+                sql = col.sql()
+                if sql not in seen:
+                    seen.add(sql)
+                    columns.append(col)
+
+        select_items = getattr(expression, 'expressions', []) or []
+        for item in select_items:
+            alias_name = getattr(item, 'alias_or_name', None)
+            if alias_name == entity_key:
+                expr = item.this if isinstance(item, exp.Alias) else item
+                for col in self.expander.collect_columns(expr):
+                    sql = col.sql()
+                    if sql not in seen:
+                        seen.add(sql)
+                        columns.append(col)
+        return columns
