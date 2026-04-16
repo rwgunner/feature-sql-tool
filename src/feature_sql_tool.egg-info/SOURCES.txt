@@ -58,5 +58,6 @@ src/feature_sql_tool/scope/alias_registry.py
 src/feature_sql_tool/scope/passthrough_detector.py
 src/feature_sql_tool/scope/relation_registry.py
 src/feature_sql_tool/scope/scope_registry.py
+tests/test_complex_cte_lineage.py
 tests/test_import.py
 tests/test_smoke_service.py

@@ -58,7 +58,6 @@ class FeatureLineageExtractor:
             )
         )
 
-        # Value lineage for the final feature.
         for col in self.expander.collect_columns(final_expr):
             resolved = resolver.resolve_column(root_scope_name, col.copy())
             self._merge_resolution(graph, resolved)
@@ -74,7 +73,6 @@ class FeatureLineageExtractor:
                     )
                 )
 
-        # Include entity key and GROUP BY columns as lineage dependencies.
         for col in self._collect_entity_and_group_columns(root_record.expression, feature_spec.entity_key):
             resolved = resolver.resolve_column(root_scope_name, col.copy())
             self._merge_resolution(graph, resolved)
@@ -90,7 +88,6 @@ class FeatureLineageExtractor:
                     )
                 )
 
-        # Filter lineage from all relevant scopes.
         for scope_record in scope_registry.iter_scopes():
             filters = filter_collector.collect(scope_record.expression)
             for clause_type, columns in filters.items():
@@ -110,17 +107,30 @@ class FeatureLineageExtractor:
                             )
                         )
 
+        role_sources = self.classifier.classify_source_columns_by_role(graph, final_node_id)
+        source_columns = sorted(set(
+            role_sources['value']
+            + role_sources['filter']
+            + role_sources['join']
+            + role_sources['group']
+        ))
+
         return FeatureLineageResult(
             feature_spec=feature_spec,
             nodes=graph.nodes,
             edges=graph.edges,
-            source_columns=self.classifier.classify_source_columns(graph),
+            source_columns=source_columns,
             intermediate_features=self.classifier.classify_intermediate_features(graph),
             filter_only_intermediate_features=self.filter_only.classify(graph, final_node_id),
+            value_source_columns=role_sources['value'],
+            filter_source_columns=role_sources['filter'],
+            join_source_columns=role_sources['join'],
+            group_source_columns=role_sources['group'],
+            unresolved_columns=self.classifier.classify_unresolved_columns(graph),
         )
 
     def _merge_resolution(self, graph: DependencyGraph, resolved) -> None:
-        for node in resolved.source_nodes + resolved.intermediate_nodes:
+        for node in resolved.source_nodes + resolved.intermediate_nodes + resolved.unresolved_nodes:
             graph.add_node(node)
         for edge in resolved.edges:
             graph.add_edge(edge)
