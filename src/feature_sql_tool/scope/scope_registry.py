@@ -21,10 +21,18 @@ class ScopeRecord:
 class ScopeRegistry:
     def __init__(self) -> None:
         self._scopes: Dict[str, ScopeRecord] = {}
+        self._scope_obj_ids: Dict[int, str] = {}
+        self._scope_expr_ids: Dict[int, str] = {}
         self.root_scope_name: Optional[str] = None
 
     def register_scope(self, record: ScopeRecord) -> None:
         self._scopes[record.scope_name] = record
+        if record.scope_obj is not None:
+            self._scope_obj_ids[id(record.scope_obj)] = record.scope_name
+        if record.expression is not None:
+            self._scope_expr_ids[id(record.expression)] = record.scope_name
+            if hasattr(record.expression, 'this') and record.expression.this is not None:
+                self._scope_expr_ids[id(record.expression.this)] = record.scope_name
         if record.parent_scope_name and record.parent_scope_name in self._scopes:
             parent = self._scopes[record.parent_scope_name]
             if record.scope_name not in parent.child_scope_names:
@@ -66,3 +74,21 @@ class ScopeRegistry:
 
     def list_relations(self, scope_name: str) -> list[RelationDescriptor]:
         return list(self._scopes[scope_name].relations.values())
+
+    def find_scope_name_for_obj(self, obj: Any) -> Optional[str]:
+        if obj is None:
+            return None
+        scope_name = self._scope_obj_ids.get(id(obj))
+        if scope_name is not None:
+            return scope_name
+        expr = getattr(obj, 'expression', None)
+        if expr is not None:
+            scope_name = self._scope_expr_ids.get(id(expr))
+            if scope_name is not None:
+                return scope_name
+        this_expr = getattr(obj, 'this', None)
+        if this_expr is not None:
+            scope_name = self._scope_expr_ids.get(id(this_expr))
+            if scope_name is not None:
+                return scope_name
+        return None

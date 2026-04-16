@@ -75,3 +75,33 @@ class DependencyGraph:
                 visited.add(nxt)
                 queue.append(nxt)
         return False
+
+    def path_exists_with_required_types(
+        self,
+        start_node: str,
+        end_node: str,
+        allowed_types: Iterable[str],
+        required_types: Iterable[str],
+    ) -> bool:
+        allowed = set(allowed_types)
+        required = set(required_types)
+        queue = deque([(start_node, False)])
+        visited = {(start_node, False)}
+
+        while queue:
+            cur, seen_required = queue.popleft()
+            if cur == end_node and seen_required:
+                return True
+
+            for nxt in self.downstream(cur):
+                edges = self._edges_by_pair[(cur, nxt)]
+                edge_types = {e.dependency_type for e in edges}
+                if not edge_types & allowed:
+                    continue
+                next_seen_required = seen_required or bool(edge_types & required)
+                state = (nxt, next_seen_required)
+                if state in visited:
+                    continue
+                visited.add(state)
+                queue.append(state)
+        return False

@@ -28,10 +28,6 @@ class SqlParser:
         root_scope = build_scope(expression)
         traversed_scopes = list(traverse_scope(expression))
 
-        # sqlglot can return the root scope from build_scope while traverse_scope may
-        # enumerate scopes in a different order and, in some cases, omit the exact
-        # same root object instance. We therefore always register the build_scope root
-        # explicitly and then append the rest of the traversed scopes.
         scopes: list[Any] = []
         if root_scope is not None:
             scopes.append(root_scope)
@@ -44,12 +40,10 @@ class SqlParser:
         registry = ScopeRegistry()
         scope_id_to_name: dict[int, str] = {}
 
-        # Pass 1: assign stable names to all scopes.
         for i, scope in enumerate(scopes):
             scope_name = f"{feature_spec.feature_name}__scope_{i}"
             scope_id_to_name[id(scope)] = scope_name
 
-        # Pass 2: register scope records with resolved parent names.
         for scope in scopes:
             scope_name = scope_id_to_name[id(scope)]
             parent_scope = getattr(scope, "parent", None)
@@ -65,10 +59,10 @@ class SqlParser:
 
         for scope in scopes:
             scope_name = scope_id_to_name[id(scope)]
-            self._register_relations(feature_spec.dialect, registry, scope_name, scope, scope_id_to_name)
+            self._register_relations(feature_spec.dialect, registry, scope_name, scope)
             self._register_aliases(feature_spec.dialect, registry, scope_name, scope)
 
-        registry.set_root_scope(scope_id_to_name.get(id(root_scope)) if root_scope is not None else None)
+        registry.set_root_scope(registry.find_scope_name_for_obj(root_scope) if root_scope is not None else None)
 
         return ParseResult(
             feature_spec=feature_spec,
@@ -83,47 +77,68 @@ class SqlParser:
         registry: ScopeRegistry,
         scope_name: str,
         scope: Any,
-        scope_id_to_name: dict[int, str],
     ) -> None:
+        selected_sources = getattr(scope, 'selected_sources', None)
+        if selected_sources:
+            for relation_name, (_node, source_obj) in selected_sources.items():
+                registry.register_relation(
+                    scope_name,
+                    self._build_relation_descriptor(registry, scope_name, relation_name, source_obj),
+                )
+            return
+
         sources = getattr(scope, "sources", {}) or {}
         for relation_name, source_obj in sources.items():
-            relation_type = "unknown"
-            physical_table_name = None
-            source_scope_name = None
-            alias_name = relation_name
-
-            if isinstance(source_obj, exp.Table):
-                relation_type = "physical_table"
-                physical_table_name = source_obj.name
-                alias_name = source_obj.alias_or_name or relation_name
-            elif id(source_obj) in scope_id_to_name:
-                relation_type = "scope_source"
-                source_scope_name = scope_id_to_name[id(source_obj)]
-            elif getattr(source_obj, "expression", None) is not None and id(source_obj) in scope_id_to_name:
-                relation_type = "scope_source"
-                source_scope_name = scope_id_to_name[id(source_obj)]
-            elif isinstance(source_obj, exp.Subquery):
-                relation_type = "subquery"
-            elif relation_name:
-                # most CTE references appear here as Scope objects; keep a permissive fallback
-                relation_type = "cte"
-
             registry.register_relation(
                 scope_name,
-                RelationDescriptor(
-                    relation_name=relation_name,
-                    relation_type=relation_type,
-                    scope_name=scope_name,
-                    source_scope_name=source_scope_name,
-                    physical_table_name=physical_table_name,
-                    alias_name=alias_name,
-                ),
+                self._build_relation_descriptor(registry, scope_name, relation_name, source_obj),
             )
 
+    def _build_relation_descriptor(
+        self,
+        registry: ScopeRegistry,
+        scope_name: str,
+        relation_name: str,
+        source_obj: Any,
+    ) -> RelationDescriptor:
+        relation_type = 'unknown'
+        physical_table_name = None
+        source_scope_name = None
+        alias_name = relation_name
+
+        if isinstance(source_obj, exp.Table):
+            relation_type = 'physical_table'
+            physical_table_name = source_obj.name
+            alias_name = source_obj.alias_or_name or relation_name
+        else:
+            source_scope_name = registry.find_scope_name_for_obj(source_obj)
+            if source_scope_name:
+                if getattr(source_obj, 'is_cte', False):
+                    relation_type = 'cte'
+                elif getattr(source_obj, 'is_subquery', False) or isinstance(source_obj, exp.Subquery):
+                    relation_type = 'subquery'
+                elif getattr(source_obj, 'is_derived_table', False):
+                    relation_type = 'derived_table'
+                else:
+                    relation_type = 'scope_source'
+            elif isinstance(source_obj, exp.Subquery):
+                relation_type = 'subquery'
+            elif relation_name:
+                relation_type = 'cte'
+
+        return RelationDescriptor(
+            relation_name=relation_name,
+            relation_type=relation_type,
+            scope_name=scope_name,
+            source_scope_name=source_scope_name,
+            physical_table_name=physical_table_name,
+            alias_name=alias_name,
+        )
+
     def _register_aliases(self, dialect: str, registry: ScopeRegistry, scope_name: str, scope: Any) -> None:
-        select_items = getattr(getattr(scope, "expression", None), "expressions", []) or []
+        select_items = getattr(getattr(scope, 'expression', None), 'expressions', []) or []
         for item in select_items:
-            alias_name = getattr(item, "alias_or_name", None)
+            alias_name = getattr(item, 'alias_or_name', None)
             if not alias_name:
                 continue
             expression = item.this if isinstance(item, exp.Alias) else item

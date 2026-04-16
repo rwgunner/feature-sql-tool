@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: feature-sql-tool
-Version: 0.3.0
+Version: 0.5.0
 Summary: SQL feature lineage extraction and unified vector SQL planning
 Author-email: Your Name <you@example.com>
 License: MIT
