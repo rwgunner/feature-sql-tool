@@ -9,8 +9,8 @@ class FilterOnlyClassifier:
         for node_id, node in graph.nodes.items():
             if node.node_type != 'intermediate_feature':
                 continue
-            has_filter_path = graph.path_exists(node_id, final_node_id, {'filter', 'join', 'passthrough'})
-            has_value_path = graph.path_exists(node_id, final_node_id, {'value', 'group', 'passthrough'})
+            has_filter_path = graph.path_exists(node_id, final_node_id, {'filter', 'join', 'passthrough', 'set'})
+            has_value_path = graph.path_exists(node_id, final_node_id, {'value', 'group', 'passthrough', 'set'})
             if has_filter_path and not has_value_path:
                 result.append(node_id)
         return sorted(result)

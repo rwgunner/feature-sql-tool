@@ -5,6 +5,7 @@ from typing import Any, Dict, Iterator, Optional
 
 from feature_sql_tool.models.expression_ref import ExpressionRef
 from feature_sql_tool.models.relation_descriptor import RelationDescriptor
+from feature_sql_tool.models.set_operation_descriptor import SetOperationDescriptor
 
 
 @dataclass
@@ -16,6 +17,7 @@ class ScopeRecord:
     child_scope_names: list[str] = field(default_factory=list)
     relations: Dict[str, RelationDescriptor] = field(default_factory=dict)
     aliases: Dict[str, ExpressionRef] = field(default_factory=dict)
+    set_operation: SetOperationDescriptor | None = None
 
 
 class ScopeRegistry:
@@ -57,11 +59,15 @@ class ScopeRegistry:
     def register_alias(self, scope_name: str, expression_ref: ExpressionRef) -> None:
         self._scopes[scope_name].aliases[expression_ref.alias_name] = expression_ref
 
+    def register_set_operation(self, scope_name: str, descriptor: SetOperationDescriptor) -> None:
+        self._scopes[scope_name].set_operation = descriptor
+
+    def get_set_operation(self, scope_name: str) -> SetOperationDescriptor | None:
+        return self._scopes[scope_name].set_operation
+
     def find_alias(self, scope_name: str, alias_name: str) -> Optional[ExpressionRef]:
         scope = self._scopes[scope_name]
-        if alias_name in scope.aliases:
-            return scope.aliases[alias_name]
-        return None
+        return scope.aliases.get(alias_name)
 
     def find_relation(self, scope_name: str, relation_name: str) -> Optional[RelationDescriptor]:
         scope = self._scopes[scope_name]

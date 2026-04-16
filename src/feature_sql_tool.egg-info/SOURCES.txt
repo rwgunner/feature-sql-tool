@@ -6,6 +6,7 @@ sql_samples/feature_avg_paid_amount_recent_30d.sql
 sql_samples/feature_avg_payment_30d.sql
 sql_samples/feature_cnt_paid_txn_30d.sql
 sql_samples/feature_filter_only_flag.sql
+sql_samples/feature_payment_risk_score.sql
 sql_samples/feature_total_paid_active_30d.sql
 src/feature_sql_tool/__init__.py
 src/feature_sql_tool/service.py
@@ -31,6 +32,7 @@ src/feature_sql_tool/lineage/expression_expander.py
 src/feature_sql_tool/lineage/extractor.py
 src/feature_sql_tool/lineage/filter_dependency_collector.py
 src/feature_sql_tool/models/__init__.py
+src/feature_sql_tool/models/entity_key.py
 src/feature_sql_tool/models/execution_plan.py
 src/feature_sql_tool/models/expression_ref.py
 src/feature_sql_tool/models/feature_spec.py
@@ -40,6 +42,7 @@ src/feature_sql_tool/models/parse_result.py
 src/feature_sql_tool/models/relation_descriptor.py
 src/feature_sql_tool/models/resolved_column.py
 src/feature_sql_tool/models/reusable_subgraph.py
+src/feature_sql_tool/models/set_operation_descriptor.py
 src/feature_sql_tool/models/vector_build_request.py
 src/feature_sql_tool/parser/__init__.py
 src/feature_sql_tool/parser/ast_normalizer.py
@@ -61,3 +64,4 @@ src/feature_sql_tool/scope/scope_registry.py
 tests/test_complex_cte_lineage.py
 tests/test_import.py
 tests/test_smoke_service.py
+tests/test_union_composite_lineage.py

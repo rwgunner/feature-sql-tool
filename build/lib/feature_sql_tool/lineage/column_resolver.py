@@ -7,6 +7,7 @@ from sqlglot import exp
 
 from feature_sql_tool.lineage.expression_expander import ExpressionExpander
 from feature_sql_tool.models.graph import DependencyEdge, DependencyNode
+from feature_sql_tool.scope.passthrough_detector import PassthroughDetector
 from feature_sql_tool.scope.scope_registry import ScopeRegistry
 
 
@@ -31,6 +32,7 @@ class ColumnResolver:
     def __init__(self, scope_registry: ScopeRegistry) -> None:
         self.scope_registry = scope_registry
         self.expander = ExpressionExpander()
+        self.passthrough_detector = PassthroughDetector()
 
     def resolve_column(self, scope_name: str, column: exp.Column) -> ColumnResolutionResult:
         return self._resolve_column(scope_name, column, visited=set())
@@ -64,6 +66,10 @@ class ColumnResolver:
         if alias_ref is not None:
             return self._resolve_alias_expression(scope_name, alias_ref, visited)
 
+        set_descriptor = self.scope_registry.get_set_operation(scope_name)
+        if set_descriptor is not None:
+            return self._resolve_set_operation_output(scope_name, column_name, visited)
+
         relations = self.scope_registry.list_relations(scope_name)
         candidate_results: List[ColumnResolutionResult] = []
         for relation in relations:
@@ -76,13 +82,95 @@ class ColumnResolver:
         if len(candidate_results) == 1:
             return candidate_results[0]
         if len(candidate_results) > 1:
-            # Prefer a non-physical resolution when it exists because it preserves computed aliases
-            non_physical = [r for r in candidate_results if r.intermediate_nodes]
-            if len(non_physical) == 1:
-                return non_physical[0]
+            return self._merge_candidates(scope_name, column_name, candidate_results)
 
         unresolved_column = exp.column(column_name)
         return self._make_unresolved(scope_name, unresolved_column)
+
+    def _resolve_set_operation_output(self, scope_name: str, column_name: str, visited: Set[Tuple[str, str, str | None]]) -> ColumnResolutionResult:
+        descriptor = self.scope_registry.get_set_operation(scope_name)
+        if descriptor is None:
+            return self._make_unresolved(scope_name, exp.column(column_name))
+
+        try:
+            position = list(descriptor.output_columns).index(column_name)
+        except ValueError:
+            return self._make_unresolved(scope_name, exp.column(column_name))
+
+        candidate_results: list[ColumnResolutionResult] = []
+        for branch_scope_name in (descriptor.left_scope_name, descriptor.right_scope_name):
+            if branch_scope_name:
+                candidate_results.append(self._resolve_output_position(branch_scope_name, position, visited))
+
+        candidate_results = [result for result in candidate_results if result.resolved_kind != 'unresolved']
+        if not candidate_results:
+            return self._make_unresolved(scope_name, exp.column(column_name))
+        if len(candidate_results) == 1:
+            return candidate_results[0]
+
+        merged = self._merge_candidates(scope_name, column_name, candidate_results, dependency_type='set', clause_type='union')
+        if merged.resolved_kind == 'source_column' and len(candidate_results) > 1:
+            merged.resolved_kind = 'set_output'
+        return merged
+
+    def _resolve_output_position(self, scope_name: str, position: int, visited: Set[Tuple[str, str, str | None]]) -> ColumnResolutionResult:
+        set_descriptor = self.scope_registry.get_set_operation(scope_name)
+        if set_descriptor is not None:
+            if position >= len(set_descriptor.output_columns):
+                return self._make_unresolved(scope_name, exp.column(f'__col_{position}'))
+            return self._resolve_set_operation_output(scope_name, set_descriptor.output_columns[position], visited)
+
+        scope_record = self.scope_registry.get_scope(scope_name)
+        expression = scope_record.expression
+        select_items = getattr(expression, 'expressions', []) or []
+        if position >= len(select_items):
+            return self._make_unresolved(scope_name, exp.column(f'__col_{position}'))
+        item = select_items[position]
+        alias_name = getattr(item, 'alias_or_name', None)
+        expr = item.this if isinstance(item, exp.Alias) else item
+
+        if alias_name:
+            alias_ref = self.scope_registry.find_alias(scope_name, alias_name)
+            if alias_ref is not None:
+                return self._resolve_alias_expression(scope_name, alias_ref, visited)
+
+        passthrough_column = self.passthrough_detector.extract_passthrough_column(expr)
+        if passthrough_column is not None:
+            return self._resolve_passthrough_alias(scope_name, passthrough_column.copy(), visited)
+
+        if isinstance(expr, exp.Column):
+            return self._resolve_column(scope_name, expr.copy(), visited)
+
+        synthetic_alias_name = alias_name or f'__pos_{position}'
+        synthetic_sql = expr.sql()
+        node_id = f"int:{scope_name}:{synthetic_alias_name}"
+        intermediate = DependencyNode(
+            node_id=node_id,
+            node_type='intermediate_feature',
+            name=synthetic_alias_name,
+            scope_name=scope_name,
+            expression_sql=synthetic_sql,
+        )
+        result = ColumnResolutionResult(
+            resolved_kind='intermediate_feature',
+            intermediate_nodes=[intermediate],
+            terminal_node_ids=[node_id],
+        )
+        for inner_column in self.expander.collect_columns(expr):
+            inner_result = self._resolve_column(scope_name, inner_column.copy(), visited)
+            result.merge(inner_result)
+            for terminal_id in inner_result.terminal_node_ids:
+                result.edges.append(
+                    DependencyEdge(
+                        from_node=terminal_id,
+                        to_node=node_id,
+                        dependency_type='value',
+                        clause_type='select',
+                        scope_name=scope_name,
+                        expression_sql=synthetic_sql,
+                    )
+                )
+        return result
 
     def _resolve_alias_expression(self, scope_name, alias_ref, visited: Set[Tuple[str, str, str | None]]) -> ColumnResolutionResult:
         if alias_ref.is_passthrough and alias_ref.passthrough_column is not None:
@@ -120,10 +208,13 @@ class ColumnResolver:
     def _resolve_passthrough_alias(self, scope_name: str, passthrough_column: exp.Column, visited: Set[Tuple[str, str, str | None]]) -> ColumnResolutionResult:
         if passthrough_column.table:
             return self._resolve_column(scope_name, passthrough_column.copy(), visited)
-
         return self._resolve_output_column_through_relations(scope_name, passthrough_column.name, visited)
 
     def _resolve_output_column_through_relations(self, scope_name: str, column_name: str, visited: Set[Tuple[str, str, str | None]]) -> ColumnResolutionResult:
+        set_descriptor = self.scope_registry.get_set_operation(scope_name)
+        if set_descriptor is not None:
+            return self._resolve_set_operation_output(scope_name, column_name, visited)
+
         relations = self.scope_registry.list_relations(scope_name)
         candidate_results: List[ColumnResolutionResult] = []
         for relation in relations:
@@ -136,9 +227,7 @@ class ColumnResolver:
         if len(candidate_results) == 1:
             return candidate_results[0]
         if len(candidate_results) > 1:
-            non_physical = [r for r in candidate_results if r.intermediate_nodes]
-            if len(non_physical) == 1:
-                return non_physical[0]
+            return self._merge_candidates(scope_name, column_name, candidate_results)
 
         return self._make_unresolved(scope_name, exp.column(column_name))
 
@@ -162,6 +251,35 @@ class ColumnResolver:
                     return self._make_source(source_obj.name, column_name, scope_name)
 
         return self._make_unresolved(scope_name, exp.column(column_name, table=relation_alias))
+
+    def _merge_candidates(self, scope_name: str, column_name: str, results: list[ColumnResolutionResult], dependency_type: str = 'passthrough', clause_type: str = 'select') -> ColumnResolutionResult:
+        synthetic_node_id = f"set:{scope_name}:{column_name}:{dependency_type}"
+        synthetic_node = DependencyNode(
+            node_id=synthetic_node_id,
+            node_type='set_output' if dependency_type == 'set' else 'relation_output',
+            name=column_name,
+            scope_name=scope_name,
+            expression_sql=column_name,
+        )
+        merged = ColumnResolutionResult(
+            resolved_kind='intermediate_feature',
+            intermediate_nodes=[synthetic_node],
+            terminal_node_ids=[synthetic_node_id],
+        )
+        for result in results:
+            merged.merge(result)
+            for terminal_id in result.terminal_node_ids:
+                merged.edges.append(
+                    DependencyEdge(
+                        from_node=terminal_id,
+                        to_node=synthetic_node_id,
+                        dependency_type=dependency_type,
+                        clause_type=clause_type,
+                        scope_name=scope_name,
+                        expression_sql=column_name,
+                    )
+                )
+        return merged
 
     def _make_source(self, table_name: str, column_name: str, scope_name: str) -> ColumnResolutionResult:
         normalized_table_name = table_name.split(' AS ')[0].strip() if table_name else table_name
