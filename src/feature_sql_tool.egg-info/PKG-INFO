@@ -1,118 +1,39 @@
 Metadata-Version: 2.4
 Name: feature-sql-tool
-Version: 0.1.0
-Summary: Tooling for SQL feature lineage extraction and unified vector SQL generation
-Author: rwgunner
+Version: 0.5.0
+Summary: SQL feature lineage extraction and unified vector SQL planning
+Author-email: Your Name <you@example.com>
 License: MIT
-Project-URL: Homepage, https://github.com/rwgunner/feature-sql-tool
-Project-URL: Repository, https://github.com/rwgunner/feature-sql-tool
-Project-URL: Issues, https://github.com/rwgunner/feature-sql-tool/issues
-Keywords: sql,lineage,feature-engineering,sqlglot,ml
-Classifier: Development Status :: 3 - Alpha
-Classifier: Intended Audience :: Developers
-Classifier: Intended Audience :: Science/Research
-Classifier: License :: OSI Approved :: MIT License
-Classifier: Programming Language :: Python :: 3
-Classifier: Programming Language :: Python :: 3.10
-Classifier: Programming Language :: Python :: 3.11
-Classifier: Programming Language :: Python :: 3.12
-Classifier: Operating System :: OS Independent
-Classifier: Topic :: Software Development :: Libraries :: Python Modules
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
 License-File: LICENSE
 Requires-Dist: sqlglot<28,>=25
 Provides-Extra: dev
 Requires-Dist: build>=1.2.0; extra == "dev"
-Requires-Dist: twine>=5.0.0; extra == "dev"
 Requires-Dist: pytest>=8.0.0; extra == "dev"
+Requires-Dist: twine>=5.0.0; extra == "dev"
 Dynamic: license-file
 
 # feature-sql-tool
 
-`feature-sql-tool` is a draft Python package for two related tasks:
+Current implementation of `feature-sql-tool` focused on:
 
-1. analyzing SQL scripts for model features and extracting dependency lineage;
-2. building a unified SQL query for a model input vector from multiple feature SQL files.
+- recursive column resolution through CTEs and scope aliases
+- computed-vs-passthrough alias classification
+- intermediate feature extraction
+- `filter_only_intermediate_features` classification through graph reachability
+- multi-feature unified graph building
+- safe SQL optimization by merging features with identical logical query shape
 
-The package is designed around `sqlglot` and uses a `src` layout with modern `pyproject.toml` packaging, which is the recommended approach in the Python Packaging User Guide. The packaging guide recommends defining build metadata in `pyproject.toml`, and the tool recommendations guide recommends building distributions with `python -m build` rather than calling `setup.py` directly. citeturn721430search0turn721430search2turn721430search6turn721430search7turn721430search9
+## Current scope
 
-## Features in this first version
+This package is a practical implementation scaffold with working core logic for:
 
-- `FeatureSpec` points to a `.sql` file instead of storing long SQL inline.
-- SQL loading, parsing, scope registration, lineage extraction, graph classification, and unified SQL generation are split into separate modules.
-- A first MVP service API is included.
-
-## Install locally
-
-```bash
-python -m pip install -U pip
-pip install -e .
-```
-
-For development extras:
-
-```bash
-pip install -e .[dev]
-```
-
-## Build distributions
-
-```bash
-python -m pip install -U build
-python -m build
-```
-
-This creates:
-
-- `dist/*.tar.gz` — source distribution
-- `dist/*.whl` — wheel
-
-## Check distributions
-
-```bash
-python -m pip install -U twine
-twine check dist/*
-```
-
-## Upload to PyPI
-
-```bash
-python -m pip install -U twine
-twine upload dist/*
-```
-
-## Install from a downloaded archive
-
-After publishing to PyPI:
-
-```bash
-pip download feature-sql-tool
-pip install feature_sql_tool-0.1.0-py3-none-any.whl
-```
-
-## Minimal usage example
-
-```python
-from pathlib import Path
-
-from feature_sql_tool import FeatureSqlTool, FeatureSpec
-
-features = [
-    FeatureSpec(
-        feature_name="avg_payment_30d",
-        sql_file_path=Path("sql/avg_payment_30d.sql"),
-        final_alias="avg_payment_30d",
-        entity_key="client_id",
-        dialect="spark",
-    ),
-]
-
-tool = FeatureSqlTool()
-results = tool.analyze_features(features)
-print(results[0].source_columns)
-```
+- scope parsing
+- recursive lineage for one feature
+- `filter_only` classification
+- safe grouping of multiple feature queries into shared aggregate CTEs when their `WITH/FROM/JOIN/WHERE/GROUP/HAVING/QUALIFY` signatures are identical
 
 ## Notes
 
-This package is still an MVP scaffold. Deep recursive CTE resolution, UNION-aware lineage, and real common-subgraph optimization are not fully implemented yet.
+The optimizer intentionally uses **safe reuse only**. It merges features only when their normalized query shape matches exactly.
