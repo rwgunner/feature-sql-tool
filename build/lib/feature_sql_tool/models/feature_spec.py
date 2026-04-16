@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
+
+from .entity_key import EntityKeySpec
 
 
 @dataclass(frozen=True)
@@ -10,10 +12,31 @@ class FeatureSpec:
     feature_name: str
     sql_file_path: Path
     final_alias: str
-    entity_key: str
+    entity_key: str | None = None
     dialect: str = "spark"
     grain: Optional[str] = None
     snapshot_column: Optional[str] = None
+    entity_keys: tuple[str, ...] | list[str] | None = None
+
+    def __post_init__(self) -> None:
+        keys = self.entity_keys
+        if keys is None:
+            if self.entity_key is None:
+                raise ValueError(f"Feature '{self.feature_name}' requires entity_key or entity_keys")
+            keys = (self.entity_key,)
+        elif isinstance(keys, str):
+            keys = (keys,)
+        else:
+            keys = tuple(keys)
+
+        key_spec = EntityKeySpec(tuple(keys))
+        object.__setattr__(self, 'entity_keys', key_spec.keys)
+        if self.entity_key is None:
+            object.__setattr__(self, 'entity_key', key_spec.primary_key)
+
+    @property
+    def entity_key_spec(self) -> EntityKeySpec:
+        return EntityKeySpec(tuple(self.entity_keys or ()))
 
     def validate(self) -> None:
         if self.sql_file_path.suffix.lower() != ".sql":

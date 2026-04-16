@@ -45,3 +45,23 @@ def test_smoke_build_sql_from_feature_list() -> None:
     tool = FeatureSqlTool()
     sql = tool.build_unified_sql(features)
     assert "avg_payment_30d" in sql
+
+
+def test_composite_key_build_sql_not_supported_yet() -> None:
+    root = Path(__file__).resolve().parents[1]
+    features = [
+        FeatureSpec(
+            feature_name="payment_risk_score",
+            sql_file_path=root / "sql_samples" / "feature_payment_risk_score.sql",
+            final_alias="payment_risk_score",
+            entity_keys=["client_id", "payment_id"],
+            dialect="spark",
+            grain="client_id,payment_id",
+        )
+    ]
+    tool = FeatureSqlTool()
+    try:
+        tool.build_unified_sql(features)
+    except NotImplementedError:
+        return
+    raise AssertionError('Composite-key unified SQL generation should raise NotImplementedError for 1.0.0')

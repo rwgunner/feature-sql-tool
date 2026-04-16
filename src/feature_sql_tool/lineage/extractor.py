@@ -37,9 +37,7 @@ class FeatureLineageExtractor:
         if final_expr_ref is None:
             final_expr = self._find_final_expression(root_record.expression, feature_spec.final_alias)
             if final_expr is None:
-                raise ValueError(
-                    f"Final alias '{feature_spec.final_alias}' was not found in root scope for feature '{feature_spec.feature_name}'"
-                )
+                raise ValueError(f"Final alias '{feature_spec.final_alias}' was not found in root scope for feature '{feature_spec.feature_name}'")
             final_expr_sql = self.normalizer.normalize_expression_sql(final_expr, feature_spec.dialect)
         else:
             final_expr = final_expr_ref.expression
@@ -53,7 +51,7 @@ class FeatureLineageExtractor:
                 name=feature_spec.feature_name,
                 scope_name=root_scope_name,
                 expression_sql=final_expr_sql,
-                grain=feature_spec.grain,
+                grain=','.join(feature_spec.entity_keys or ()) or feature_spec.grain,
                 feature_name=feature_spec.feature_name,
             )
         )
@@ -62,31 +60,13 @@ class FeatureLineageExtractor:
             resolved = resolver.resolve_column(root_scope_name, col.copy())
             self._merge_resolution(graph, resolved)
             for terminal_id in resolved.terminal_node_ids:
-                graph.add_edge(
-                    DependencyEdge(
-                        from_node=terminal_id,
-                        to_node=final_node_id,
-                        dependency_type='value',
-                        clause_type='select',
-                        scope_name=root_scope_name,
-                        expression_sql=str(col),
-                    )
-                )
+                graph.add_edge(DependencyEdge(from_node=terminal_id, to_node=final_node_id, dependency_type='value', clause_type='select', scope_name=root_scope_name, expression_sql=str(col)))
 
-        for col in self._collect_entity_and_group_columns(root_record.expression, feature_spec.entity_key):
+        for col in self._collect_entity_and_group_columns(root_record.expression, list(feature_spec.entity_keys or (feature_spec.entity_key,))):
             resolved = resolver.resolve_column(root_scope_name, col.copy())
             self._merge_resolution(graph, resolved)
             for terminal_id in resolved.terminal_node_ids:
-                graph.add_edge(
-                    DependencyEdge(
-                        from_node=terminal_id,
-                        to_node=final_node_id,
-                        dependency_type='group',
-                        clause_type='group_by',
-                        scope_name=root_scope_name,
-                        expression_sql=str(col),
-                    )
-                )
+                graph.add_edge(DependencyEdge(from_node=terminal_id, to_node=final_node_id, dependency_type='group', clause_type='group_by', scope_name=root_scope_name, expression_sql=str(col)))
 
         for scope_record in scope_registry.iter_scopes():
             filters = filter_collector.collect(scope_record.expression)
@@ -96,24 +76,10 @@ class FeatureLineageExtractor:
                     resolved = resolver.resolve_column(scope_record.scope_name, col.copy())
                     self._merge_resolution(graph, resolved)
                     for terminal_id in resolved.terminal_node_ids:
-                        graph.add_edge(
-                            DependencyEdge(
-                                from_node=terminal_id,
-                                to_node=final_node_id,
-                                dependency_type=dependency_type,
-                                clause_type=clause_type,
-                                scope_name=scope_record.scope_name,
-                                expression_sql=str(col),
-                            )
-                        )
+                        graph.add_edge(DependencyEdge(from_node=terminal_id, to_node=final_node_id, dependency_type=dependency_type, clause_type=clause_type, scope_name=scope_record.scope_name, expression_sql=str(col)))
 
         role_sources = self.classifier.classify_source_columns_by_role(graph, final_node_id)
-        source_columns = sorted(set(
-            role_sources['value']
-            + role_sources['filter']
-            + role_sources['join']
-            + role_sources['group']
-        ))
+        source_columns = sorted(set(role_sources['value'] + role_sources['filter'] + role_sources['join'] + role_sources['group']))
 
         return FeatureLineageResult(
             feature_spec=feature_spec,
@@ -142,7 +108,7 @@ class FeatureLineageExtractor:
                 return item.this if isinstance(item, exp.Alias) else item
         return None
 
-    def _collect_entity_and_group_columns(self, expression, entity_key: str) -> list[exp.Column]:
+    def _collect_entity_and_group_columns(self, expression, entity_keys: list[str]) -> list[exp.Column]:
         columns: list[exp.Column] = []
         seen: set[str] = set()
 
@@ -157,7 +123,7 @@ class FeatureLineageExtractor:
         select_items = getattr(expression, 'expressions', []) or []
         for item in select_items:
             alias_name = getattr(item, 'alias_or_name', None)
-            if alias_name == entity_key:
+            if alias_name in entity_keys:
                 expr = item.this if isinstance(item, exp.Alias) else item
                 for col in self.expander.collect_columns(expr):
                     sql = col.sql()
