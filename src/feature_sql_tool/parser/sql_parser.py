@@ -74,16 +74,45 @@ class SqlParser:
         )
 
     def _register_relations(self, registry: ScopeRegistry, scope_name: str, scope: Any) -> None:
+        registered = False
         selected_sources = getattr(scope, 'selected_sources', None)
         if selected_sources:
             for relation_name, value in selected_sources.items():
                 source_obj = value[1] if isinstance(value, tuple) and len(value) == 2 else value
                 registry.register_relation(scope_name, self._build_relation_descriptor(registry, scope_name, relation_name, source_obj))
-            return
+                registered = True
 
         sources = getattr(scope, 'sources', {}) or {}
         for relation_name, source_obj in sources.items():
-            registry.register_relation(scope_name, self._build_relation_descriptor(registry, scope_name, relation_name, source_obj))
+            if registry.find_relation(scope_name, relation_name) is None:
+                registry.register_relation(scope_name, self._build_relation_descriptor(registry, scope_name, relation_name, source_obj))
+            registered = True
+
+        if not registered or not registry.list_relations(scope_name):
+            self._register_relations_from_expression(registry, scope_name, getattr(scope, 'expression', None))
+
+    def _register_relations_from_expression(self, registry: ScopeRegistry, scope_name: str, expression: Any) -> None:
+        if expression is None:
+            return
+        seen: set[str] = set()
+        for table in expression.find_all(exp.Table):
+            alias_or_name = table.alias_or_name or table.name
+            if not alias_or_name or alias_or_name in seen:
+                continue
+            seen.add(alias_or_name)
+            if registry.find_relation(scope_name, alias_or_name) is not None:
+                continue
+            registry.register_relation(
+                scope_name,
+                RelationDescriptor(
+                    relation_name=alias_or_name,
+                    relation_type='physical_table',
+                    scope_name=scope_name,
+                    source_scope_name=None,
+                    physical_table_name=table.name,
+                    alias_name=alias_or_name,
+                ),
+            )
 
     def _build_relation_descriptor(self, registry: ScopeRegistry, scope_name: str, relation_name: str, source_obj: Any) -> RelationDescriptor:
         relation_type = 'unknown'
@@ -159,6 +188,8 @@ class SqlParser:
         left_scope_name = registry.find_scope_name_for_obj(left_expr)
         right_scope_name = registry.find_scope_name_for_obj(right_expr)
         output_columns = tuple(self._extract_output_columns(set_expression))
+        left_output_expressions = tuple(self._extract_output_expressions(left_expr))
+        right_output_expressions = tuple(self._extract_output_expressions(right_expr))
         registry.register_set_operation(
             scope_name,
             SetOperationDescriptor(
@@ -167,6 +198,8 @@ class SqlParser:
                 left_scope_name=left_scope_name,
                 right_scope_name=right_scope_name,
                 output_columns=output_columns,
+                left_output_expressions=left_output_expressions,
+                right_output_expressions=right_output_expressions,
             ),
         )
 
@@ -199,3 +232,13 @@ class SqlParser:
             else:
                 output_columns.append(f'__col_{idx}')
         return output_columns
+
+    def _extract_output_expressions(self, expression: Any) -> list[Any]:
+        set_expression = self._extract_set_expression(expression)
+        if set_expression is not None:
+            return self._extract_output_expressions(getattr(set_expression, 'left', None))
+        select_items = getattr(expression, 'expressions', []) or []
+        expressions: list[Any] = []
+        for item in select_items:
+            expressions.append(item.this if isinstance(item, exp.Alias) else item)
+        return expressions
