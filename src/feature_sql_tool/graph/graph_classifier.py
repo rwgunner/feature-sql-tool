@@ -20,9 +20,9 @@ class GraphClassifier:
         for node_id in source_nodes:
             if graph.path_exists_with_required_types(node_id, final_node_id, {'value', 'group', 'passthrough', 'set'}, {'value'}):
                 roles['value'].append(node_id)
-            if graph.path_exists_with_required_types(node_id, final_node_id, {'value', 'filter', 'join', 'passthrough', 'set'}, {'filter'}):
+            if graph.path_exists_with_required_types(node_id, final_node_id, {'value', 'filter', 'join', 'group', 'passthrough', 'set'}, {'filter'}):
                 roles['filter'].append(node_id)
-            if graph.path_exists_with_required_types(node_id, final_node_id, {'value', 'join', 'passthrough', 'set'}, {'join'}):
+            if graph.path_exists_with_required_types(node_id, final_node_id, {'value', 'join', 'group', 'passthrough', 'set'}, {'join'}):
                 roles['join'].append(node_id)
             if graph.path_exists_with_required_types(node_id, final_node_id, {'value', 'group', 'passthrough', 'set'}, {'group'}):
                 roles['group'].append(node_id)

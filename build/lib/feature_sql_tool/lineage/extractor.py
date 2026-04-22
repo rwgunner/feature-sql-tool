@@ -33,11 +33,13 @@ class FeatureLineageExtractor:
         resolver = ColumnResolver(scope_registry)
         filter_collector = FilterDependencyCollector()
 
-        final_expr_ref = scope_registry.find_alias(root_scope_name, feature_spec.final_alias)
+        self._validate_entity_keys_in_final_select(feature_spec.feature_name, root_record.expression, tuple(feature_spec.entity_keys or ()))
+
+        final_expr_ref = scope_registry.find_alias(root_scope_name, feature_spec.feature_name)
         if final_expr_ref is None:
-            final_expr = self._find_final_expression(root_record.expression, feature_spec.final_alias)
+            final_expr = self._find_final_expression(root_record.expression, feature_spec.feature_name)
             if final_expr is None:
-                raise ValueError(f"Final alias '{feature_spec.final_alias}' was not found in root scope for feature '{feature_spec.feature_name}'")
+                raise ValueError(f"Final alias '{feature_spec.feature_name}' was not found in root scope for feature '{feature_spec.feature_name}'")
             final_expr_sql = self.normalizer.normalize_expression_sql(final_expr, feature_spec.dialect)
         else:
             final_expr = final_expr_ref.expression
@@ -51,7 +53,7 @@ class FeatureLineageExtractor:
                 name=feature_spec.feature_name,
                 scope_name=root_scope_name,
                 expression_sql=final_expr_sql,
-                grain=','.join(feature_spec.entity_keys or ()) or feature_spec.grain,
+                grain=','.join(feature_spec.entity_keys or ()),
                 feature_name=feature_spec.feature_name,
             )
         )
@@ -104,9 +106,24 @@ class FeatureLineageExtractor:
     def _find_final_expression(self, expression, final_alias: str):
         select_items = getattr(expression, 'expressions', []) or []
         for item in select_items:
-            if getattr(item, 'alias_or_name', None) == final_alias:
+            alias_or_name = getattr(item, 'alias_or_name', None)
+            if alias_or_name == final_alias:
                 return item.this if isinstance(item, exp.Alias) else item
         return None
+
+    def _validate_entity_keys_in_final_select(self, feature_name: str, expression, entity_keys: tuple[str, ...]) -> None:
+        select_items = getattr(expression, 'expressions', []) or []
+        select_names = set()
+        for item in select_items:
+            alias_or_name = getattr(item, 'alias_or_name', None)
+            if alias_or_name:
+                select_names.add(alias_or_name)
+            elif isinstance(item, exp.Column):
+                select_names.add(item.name)
+        missing = [key for key in entity_keys if key not in select_names]
+        if missing:
+            missing_fmt = ', '.join(repr(m) for m in missing)
+            raise ValueError(f"Feature '{feature_name}': final SELECT does not contain entity key(s) {missing_fmt}")
 
     def _collect_entity_and_group_columns(self, expression, entity_keys: list[str]) -> list[exp.Column]:
         columns: list[exp.Column] = []
@@ -130,4 +147,9 @@ class FeatureLineageExtractor:
                     if sql not in seen:
                         seen.add(sql)
                         columns.append(col)
+                if isinstance(expr, exp.Column):
+                    sql = expr.sql()
+                    if sql not in seen:
+                        seen.add(sql)
+                        columns.append(expr)
         return columns
