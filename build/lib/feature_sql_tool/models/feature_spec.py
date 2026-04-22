@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Optional
 
 from .entity_key import EntityKeySpec
 
@@ -11,10 +11,8 @@ from .entity_key import EntityKeySpec
 class FeatureSpec:
     feature_name: str
     sql_file_path: Path
-    final_alias: str
     entity_key: str | None = None
     dialect: str = "spark"
-    grain: Optional[str] = None
     snapshot_column: Optional[str] = None
     entity_keys: tuple[str, ...] | list[str] | None = None
 
@@ -37,6 +35,14 @@ class FeatureSpec:
     @property
     def entity_key_spec(self) -> EntityKeySpec:
         return EntityKeySpec(tuple(self.entity_keys or ()))
+
+    @property
+    def final_alias(self) -> str:
+        return self.feature_name
+
+    @property
+    def grain(self) -> str:
+        return ','.join(self.entity_keys or ())
 
     def validate(self) -> None:
         if self.sql_file_path.suffix.lower() != ".sql":

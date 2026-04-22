@@ -21,8 +21,18 @@ class FeatureSqlTool:
         self.reusable_detector = ReusableSubgraphDetector()
         self.optimization_reporter = OptimizationReporter()
 
+    def _validate_same_entity_keys(self, features: list[FeatureSpec], method_name: str) -> tuple[str, ...]:
+        if not features:
+            raise ValueError('No features provided.')
+        entity_key_sets = {tuple(feature.entity_keys or (feature.entity_key,)) for feature in features}
+        if len(entity_key_sets) != 1:
+            raise ValueError(f'All features passed to {method_name} must share the same entity_keys, got: {sorted(entity_key_sets)}')
+        return next(iter(entity_key_sets))
+
     def analyze_features(self, features: Iterable[FeatureSpec]):
-        return [self.extractor.extract(feature) for feature in features]
+        feature_list = list(features)
+        self._validate_same_entity_keys(feature_list, 'analyze_features')
+        return [self.extractor.extract(feature) for feature in feature_list]
 
     def build_unified_graph(self, features: Iterable[FeatureSpec]):
         results = self.analyze_features(features)
@@ -30,16 +40,15 @@ class FeatureSqlTool:
 
     def _ensure_request(self, request_or_features) -> VectorBuildRequest:
         if isinstance(request_or_features, VectorBuildRequest):
+            features = list(request_or_features.features)
+            entity_keys = self._validate_same_entity_keys(features, 'build_unified_sql')
+            if tuple(request_or_features.entity_keys or (request_or_features.entity_key,)) != entity_keys:
+                raise ValueError(f"VectorBuildRequest.entity_keys {tuple(request_or_features.entity_keys or ())} do not match feature entity_keys {entity_keys}")
             return request_or_features
         features = list(request_or_features)
-        if not features:
-            raise ValueError('No features provided.')
-        entity_key_sets = {tuple(feature.entity_keys or (feature.entity_key,)) for feature in features}
-        if len(entity_key_sets) != 1:
-            raise ValueError(f'All features must share the same entity_keys, got: {sorted(entity_key_sets)}')
+        entity_keys = self._validate_same_entity_keys(features, 'build_unified_sql')
         dialects = {feature.dialect for feature in features}
         dialect = next(iter(dialects)) if dialects else 'spark'
-        entity_keys = tuple(features[0].entity_keys or (features[0].entity_key,))
         return VectorBuildRequest(features=features, entity_key=entity_keys[0], entity_keys=entity_keys, entity_sql_file_path=None, dialect=dialect)
 
     def build_execution_plan(self, request_or_features):
