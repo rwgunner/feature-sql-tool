@@ -64,13 +64,13 @@ class FeatureLineageExtractor:
             for terminal_id in resolved.terminal_node_ids:
                 graph.add_edge(DependencyEdge(from_node=terminal_id, to_node=final_node_id, dependency_type='value', clause_type='select', scope_name=root_scope_name, expression_sql=str(col)))
 
-        for col in self._collect_entity_and_group_columns(root_record.expression, list(feature_spec.entity_keys or (feature_spec.entity_key,))):
-            resolved = resolver.resolve_column(root_scope_name, col.copy())
-            self._merge_resolution(graph, resolved)
-            for terminal_id in resolved.terminal_node_ids:
-                graph.add_edge(DependencyEdge(from_node=terminal_id, to_node=final_node_id, dependency_type='group', clause_type='group_by', scope_name=root_scope_name, expression_sql=str(col)))
-
         for scope_record in scope_registry.iter_scopes():
+            for col in self._collect_entity_and_group_columns(scope_record.expression, list(feature_spec.entity_keys or (feature_spec.entity_key,))):
+                resolved = resolver.resolve_column(scope_record.scope_name, col.copy())
+                self._merge_resolution(graph, resolved)
+                for terminal_id in resolved.terminal_node_ids:
+                    graph.add_edge(DependencyEdge(from_node=terminal_id, to_node=final_node_id, dependency_type='group', clause_type='group_by', scope_name=scope_record.scope_name, expression_sql=str(col)))
+
             filters = filter_collector.collect(scope_record.expression)
             for clause_type, columns in filters.items():
                 dependency_type = 'join' if clause_type == 'join_on' else 'filter'

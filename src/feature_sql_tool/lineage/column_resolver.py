@@ -98,8 +98,16 @@ class ColumnResolver:
             return self._make_unresolved(scope_name, exp.column(column_name))
 
         candidate_results: list[ColumnResolutionResult] = []
-        for branch_scope_name in (descriptor.left_scope_name, descriptor.right_scope_name):
-            if branch_scope_name:
+        branch_specs = (
+            (descriptor.left_scope_name, descriptor.left_output_expressions),
+            (descriptor.right_scope_name, descriptor.right_output_expressions),
+        )
+        for branch_scope_name, branch_outputs in branch_specs:
+            if not branch_scope_name:
+                continue
+            if position < len(branch_outputs):
+                candidate_results.append(self._resolve_branch_expression(branch_scope_name, branch_outputs[position], visited))
+            else:
                 candidate_results.append(self._resolve_output_position(branch_scope_name, position, visited))
 
         candidate_results = [result for result in candidate_results if result.resolved_kind != 'unresolved']
@@ -126,14 +134,10 @@ class ColumnResolver:
         if position >= len(select_items):
             return self._make_unresolved(scope_name, exp.column(f'__col_{position}'))
         item = select_items[position]
-        alias_name = getattr(item, 'alias_or_name', None)
         expr = item.this if isinstance(item, exp.Alias) else item
+        return self._resolve_branch_expression(scope_name, expr, visited, position=position)
 
-        if alias_name:
-            alias_ref = self.scope_registry.find_alias(scope_name, alias_name)
-            if alias_ref is not None:
-                return self._resolve_alias_expression(scope_name, alias_ref, visited)
-
+    def _resolve_branch_expression(self, scope_name: str, expr, visited: Set[Tuple[str, str, str | None]], position: int | None = None) -> ColumnResolutionResult:
         passthrough_column = self.passthrough_detector.extract_passthrough_column(expr)
         if passthrough_column is not None:
             return self._resolve_passthrough_alias(scope_name, passthrough_column.copy(), visited)
@@ -141,7 +145,7 @@ class ColumnResolver:
         if isinstance(expr, exp.Column):
             return self._resolve_column(scope_name, expr.copy(), visited)
 
-        synthetic_alias_name = alias_name or f'__pos_{position}'
+        synthetic_alias_name = getattr(expr, 'alias_or_name', None) or (f'__pos_{position}' if position is not None else '__expr')
         synthetic_sql = expr.sql()
         node_id = f"int:{scope_name}:{synthetic_alias_name}"
         intermediate = DependencyNode(
@@ -249,6 +253,13 @@ class ColumnResolver:
                     return self._resolve_output_column(source_scope_name, column_name, visited)
                 if isinstance(source_obj, exp.Table):
                     return self._make_source(source_obj.name, column_name, scope_name)
+
+        expression = scope_record.expression
+        if expression is not None:
+            for table in expression.find_all(exp.Table):
+                alias_or_name = table.alias_or_name or table.name
+                if alias_or_name == relation_alias:
+                    return self._make_source(table.name, column_name, scope_name)
 
         return self._make_unresolved(scope_name, exp.column(column_name, table=relation_alias))
 
