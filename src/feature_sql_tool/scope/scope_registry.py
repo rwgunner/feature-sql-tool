@@ -5,6 +5,7 @@ from typing import Any, Dict, Iterator, Optional
 
 from feature_sql_tool.models.expression_ref import ExpressionRef
 from feature_sql_tool.models.relation_descriptor import RelationDescriptor
+from feature_sql_tool.models.set_operation_descriptor import SetOperationDescriptor
 
 
 @dataclass
@@ -16,6 +17,7 @@ class ScopeRecord:
     child_scope_names: list[str] = field(default_factory=list)
     relations: Dict[str, RelationDescriptor] = field(default_factory=dict)
     aliases: Dict[str, ExpressionRef] = field(default_factory=dict)
+    set_operation: SetOperationDescriptor | None = None
 
 
 class ScopeRegistry:
@@ -23,6 +25,7 @@ class ScopeRegistry:
         self._scopes: Dict[str, ScopeRecord] = {}
         self._scope_obj_ids: Dict[int, str] = {}
         self._scope_expr_ids: Dict[int, str] = {}
+        self._scope_sql_to_name: Dict[str, str] = {}
         self.root_scope_name: Optional[str] = None
 
     def register_scope(self, record: ScopeRecord) -> None:
@@ -31,8 +34,10 @@ class ScopeRegistry:
             self._scope_obj_ids[id(record.scope_obj)] = record.scope_name
         if record.expression is not None:
             self._scope_expr_ids[id(record.expression)] = record.scope_name
+            self._scope_sql_to_name[self._normalize_sql(record.expression)] = record.scope_name
             if hasattr(record.expression, 'this') and record.expression.this is not None:
                 self._scope_expr_ids[id(record.expression.this)] = record.scope_name
+                self._scope_sql_to_name[self._normalize_sql(record.expression.this)] = record.scope_name
         if record.parent_scope_name and record.parent_scope_name in self._scopes:
             parent = self._scopes[record.parent_scope_name]
             if record.scope_name not in parent.child_scope_names:
@@ -57,11 +62,15 @@ class ScopeRegistry:
     def register_alias(self, scope_name: str, expression_ref: ExpressionRef) -> None:
         self._scopes[scope_name].aliases[expression_ref.alias_name] = expression_ref
 
+    def register_set_operation(self, scope_name: str, descriptor: SetOperationDescriptor) -> None:
+        self._scopes[scope_name].set_operation = descriptor
+
+    def get_set_operation(self, scope_name: str) -> SetOperationDescriptor | None:
+        return self._scopes[scope_name].set_operation
+
     def find_alias(self, scope_name: str, alias_name: str) -> Optional[ExpressionRef]:
         scope = self._scopes[scope_name]
-        if alias_name in scope.aliases:
-            return scope.aliases[alias_name]
-        return None
+        return scope.aliases.get(alias_name)
 
     def find_relation(self, scope_name: str, relation_name: str) -> Optional[RelationDescriptor]:
         scope = self._scopes[scope_name]
@@ -91,4 +100,18 @@ class ScopeRegistry:
             scope_name = self._scope_expr_ids.get(id(this_expr))
             if scope_name is not None:
                 return scope_name
-        return None
+        return self.find_scope_name_for_expression(obj)
+
+    def find_scope_name_for_expression(self, expression: Any) -> Optional[str]:
+        if expression is None:
+            return None
+        return self._scope_sql_to_name.get(self._normalize_sql(expression))
+
+    def _normalize_sql(self, expression: Any) -> str:
+        try:
+            return expression.sql(dialect='spark')
+        except Exception:
+            try:
+                return expression.sql()
+            except Exception:
+                return str(expression)

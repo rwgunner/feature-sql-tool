@@ -8,6 +8,7 @@ from sqlglot.optimizer.scope import build_scope, traverse_scope
 from feature_sql_tool.models.expression_ref import ExpressionRef
 from feature_sql_tool.models.parse_result import ParseResult
 from feature_sql_tool.models.relation_descriptor import RelationDescriptor
+from feature_sql_tool.models.set_operation_descriptor import SetOperationDescriptor
 from feature_sql_tool.parser.ast_normalizer import AstNormalizer
 from feature_sql_tool.parser.sql_loader import SqlFileLoader
 from feature_sql_tool.scope.passthrough_detector import PassthroughDetector
@@ -46,21 +47,22 @@ class SqlParser:
 
         for scope in scopes:
             scope_name = scope_id_to_name[id(scope)]
-            parent_scope = getattr(scope, "parent", None)
+            parent_scope = getattr(scope, 'parent', None)
             parent_scope_name = scope_id_to_name.get(id(parent_scope)) if parent_scope is not None else None
             registry.register_scope(
                 ScopeRecord(
                     scope_name=scope_name,
                     scope_obj=scope,
-                    expression=getattr(scope, "expression", None),
+                    expression=getattr(scope, 'expression', None),
                     parent_scope_name=parent_scope_name,
                 )
             )
 
         for scope in scopes:
             scope_name = scope_id_to_name[id(scope)]
-            self._register_relations(feature_spec.dialect, registry, scope_name, scope)
+            self._register_relations(registry, scope_name, scope)
             self._register_aliases(feature_spec.dialect, registry, scope_name, scope)
+            self._register_set_operation(registry, scope_name, scope)
 
         registry.set_root_scope(registry.find_scope_name_for_obj(root_scope) if root_scope is not None else None)
 
@@ -71,36 +73,48 @@ class SqlParser:
             scope_registry=registry,
         )
 
-    def _register_relations(
-        self,
-        dialect: str,
-        registry: ScopeRegistry,
-        scope_name: str,
-        scope: Any,
-    ) -> None:
+    def _register_relations(self, registry: ScopeRegistry, scope_name: str, scope: Any) -> None:
+        registered = False
         selected_sources = getattr(scope, 'selected_sources', None)
         if selected_sources:
-            for relation_name, (_node, source_obj) in selected_sources.items():
-                registry.register_relation(
-                    scope_name,
-                    self._build_relation_descriptor(registry, scope_name, relation_name, source_obj),
-                )
-            return
+            for relation_name, value in selected_sources.items():
+                source_obj = value[1] if isinstance(value, tuple) and len(value) == 2 else value
+                registry.register_relation(scope_name, self._build_relation_descriptor(registry, scope_name, relation_name, source_obj))
+                registered = True
 
-        sources = getattr(scope, "sources", {}) or {}
+        sources = getattr(scope, 'sources', {}) or {}
         for relation_name, source_obj in sources.items():
+            if registry.find_relation(scope_name, relation_name) is None:
+                registry.register_relation(scope_name, self._build_relation_descriptor(registry, scope_name, relation_name, source_obj))
+            registered = True
+
+        if not registered or not registry.list_relations(scope_name):
+            self._register_relations_from_expression(registry, scope_name, getattr(scope, 'expression', None))
+
+    def _register_relations_from_expression(self, registry: ScopeRegistry, scope_name: str, expression: Any) -> None:
+        if expression is None:
+            return
+        seen: set[str] = set()
+        for table in expression.find_all(exp.Table):
+            alias_or_name = table.alias_or_name or table.name
+            if not alias_or_name or alias_or_name in seen:
+                continue
+            seen.add(alias_or_name)
+            if registry.find_relation(scope_name, alias_or_name) is not None:
+                continue
             registry.register_relation(
                 scope_name,
-                self._build_relation_descriptor(registry, scope_name, relation_name, source_obj),
+                RelationDescriptor(
+                    relation_name=alias_or_name,
+                    relation_type='physical_table',
+                    scope_name=scope_name,
+                    source_scope_name=None,
+                    physical_table_name=table.name,
+                    alias_name=alias_or_name,
+                ),
             )
 
-    def _build_relation_descriptor(
-        self,
-        registry: ScopeRegistry,
-        scope_name: str,
-        relation_name: str,
-        source_obj: Any,
-    ) -> RelationDescriptor:
+    def _build_relation_descriptor(self, registry: ScopeRegistry, scope_name: str, relation_name: str, source_obj: Any) -> RelationDescriptor:
         relation_type = 'unknown'
         physical_table_name = None
         source_scope_name = None
@@ -113,7 +127,11 @@ class SqlParser:
         else:
             source_scope_name = registry.find_scope_name_for_obj(source_obj)
             if source_scope_name:
-                if getattr(source_obj, 'is_cte', False):
+                expression = registry.get_scope(source_scope_name).expression
+                set_expr = self._extract_set_expression(expression)
+                if set_expr is not None:
+                    relation_type = 'set_operation'
+                elif getattr(source_obj, 'is_cte', False):
                     relation_type = 'cte'
                 elif getattr(source_obj, 'is_subquery', False) or isinstance(source_obj, exp.Subquery):
                     relation_type = 'subquery'
@@ -136,23 +154,93 @@ class SqlParser:
         )
 
     def _register_aliases(self, dialect: str, registry: ScopeRegistry, scope_name: str, scope: Any) -> None:
-        select_items = getattr(getattr(scope, 'expression', None), 'expressions', []) or []
+        expression = getattr(scope, 'expression', None)
+        select_expr = self._select_expression_for_aliases(expression)
+        select_items = getattr(select_expr, 'expressions', []) or []
         for item in select_items:
             alias_name = getattr(item, 'alias_or_name', None)
             if not alias_name:
                 continue
-            expression = item.this if isinstance(item, exp.Alias) else item
-            passthrough_column = self.passthrough_detector.extract_passthrough_column(expression)
+            expression_item = item.this if isinstance(item, exp.Alias) else item
+            passthrough_column = self.passthrough_detector.extract_passthrough_column(expression_item)
             is_passthrough = passthrough_column is not None
             registry.register_alias(
                 scope_name,
                 ExpressionRef(
                     scope_name=scope_name,
                     alias_name=alias_name,
-                    expression=expression,
-                    expression_sql=self.normalizer.normalize_expression_sql(expression, dialect),
+                    expression=expression_item,
+                    expression_sql=self.normalizer.normalize_expression_sql(expression_item, dialect),
                     is_computed=not is_passthrough,
                     is_passthrough=is_passthrough,
                     passthrough_column=passthrough_column,
                 ),
             )
+
+    def _register_set_operation(self, registry: ScopeRegistry, scope_name: str, scope: Any) -> None:
+        expression = getattr(scope, 'expression', None)
+        set_expression = self._extract_set_expression(expression)
+        if set_expression is None:
+            return
+
+        left_expr = getattr(set_expression, 'left', None)
+        right_expr = getattr(set_expression, 'right', None)
+        left_scope_name = registry.find_scope_name_for_obj(left_expr) or registry.find_scope_name_for_expression(left_expr)
+        right_scope_name = registry.find_scope_name_for_obj(right_expr) or registry.find_scope_name_for_expression(right_expr)
+        output_columns = tuple(self._extract_output_columns(set_expression))
+        left_output_expressions = tuple(self._extract_output_expressions(left_expr))
+        right_output_expressions = tuple(self._extract_output_expressions(right_expr))
+        registry.register_set_operation(
+            scope_name,
+            SetOperationDescriptor(
+                scope_name=scope_name,
+                operation_type=set_expression.key.lower(),
+                left_scope_name=left_scope_name,
+                right_scope_name=right_scope_name,
+                output_columns=output_columns,
+                left_output_expressions=left_output_expressions,
+                right_output_expressions=right_output_expressions,
+                left_expression=left_expr,
+                right_expression=right_expr,
+            ),
+        )
+
+    def _extract_set_expression(self, expression: Any):
+        if isinstance(expression, exp.SetOperation):
+            return expression
+        this_expr = getattr(expression, 'this', None)
+        if isinstance(this_expr, exp.SetOperation):
+            return this_expr
+        return None
+
+    def _select_expression_for_aliases(self, expression: Any):
+        set_expression = self._extract_set_expression(expression)
+        if set_expression is not None:
+            return getattr(set_expression, 'left', None)
+        return expression
+
+    def _extract_output_columns(self, expression: Any) -> list[str]:
+        set_expression = self._extract_set_expression(expression)
+        if set_expression is not None:
+            return self._extract_output_columns(getattr(set_expression, 'left', None))
+        select_items = getattr(expression, 'expressions', []) or []
+        output_columns: list[str] = []
+        for idx, item in enumerate(select_items):
+            alias_name = getattr(item, 'alias_or_name', None)
+            if alias_name:
+                output_columns.append(alias_name)
+            elif isinstance(item, exp.Column):
+                output_columns.append(item.name)
+            else:
+                output_columns.append(f'__col_{idx}')
+        return output_columns
+
+    def _extract_output_expressions(self, expression: Any) -> list[Any]:
+        set_expression = self._extract_set_expression(expression)
+        if set_expression is not None:
+            return self._extract_output_expressions(getattr(set_expression, 'left', None))
+        select_items = getattr(expression, 'expressions', []) or []
+        expressions: list[Any] = []
+        for item in select_items:
+            expressions.append(item.this if isinstance(item, exp.Alias) else item)
+        return expressions

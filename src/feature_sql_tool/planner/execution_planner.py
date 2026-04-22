@@ -18,7 +18,6 @@ class QueryShape:
     feature_name: str
     entity_key: str
     entity_expr_sql: str
-    final_alias: str
     final_expr_sql: str
     with_sql: str
     from_sql: str
@@ -72,7 +71,7 @@ class ExecutionPlanner:
                 plan.feature_steps.setdefault(feature_name, []).append(step)
             for shape in group_shapes:
                 plan.feature_to_step_name[shape.feature_name] = step_name
-                plan.feature_to_column_name[shape.feature_name] = shape.final_alias
+                plan.feature_to_column_name[shape.feature_name] = shape.feature_name
 
         if request.entity_sql_file_path is not None:
             entity_sql = request.entity_sql_file_path.read_text(encoding='utf-8')
@@ -99,13 +98,12 @@ class ExecutionPlanner:
         qualify_sql = self._clause_sql(root.args.get('qualify'), result.feature_spec.dialect)
 
         entity_expr_sql = self._find_select_expression_sql(root, result.feature_spec.entity_key, result.feature_spec.dialect)
-        final_expr_sql = self._find_select_expression_sql(root, result.feature_spec.final_alias, result.feature_spec.dialect)
+        final_expr_sql = self._find_select_expression_sql(root, result.feature_spec.feature_name, result.feature_spec.dialect)
 
         return QueryShape(
             feature_name=result.feature_spec.feature_name,
             entity_key=result.feature_spec.entity_key,
             entity_expr_sql=entity_expr_sql,
-            final_alias=result.feature_spec.final_alias,
             final_expr_sql=final_expr_sql,
             with_sql=with_sql,
             from_sql=from_sql,
@@ -130,7 +128,7 @@ class ExecutionPlanner:
         first = shapes[0]
         select_lines = [f"{first.entity_expr_sql} AS {first.entity_key}"]
         for shape in shapes:
-            select_lines.append(f"{shape.final_expr_sql} AS {shape.final_alias}")
+            select_lines.append(f"{shape.final_expr_sql} AS {shape.feature_name}")
 
         parts: list[str] = []
         if first.with_sql:
