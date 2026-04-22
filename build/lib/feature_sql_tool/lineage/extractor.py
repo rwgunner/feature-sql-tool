@@ -61,8 +61,15 @@ class FeatureLineageExtractor:
         for col in self.expander.collect_columns(final_expr):
             resolved = resolver.resolve_column(root_scope_name, col.copy())
             self._merge_resolution(graph, resolved)
-            for terminal_id in resolved.terminal_node_ids:
-                graph.add_edge(DependencyEdge(from_node=terminal_id, to_node=final_node_id, dependency_type='value', clause_type='select', scope_name=root_scope_name, expression_sql=str(col)))
+            self._attach_resolution_context_edges(
+                graph=graph,
+                resolved=resolved,
+                target_node_id=final_node_id,
+                dependency_type='value',
+                clause_type='select',
+                scope_name=root_scope_name,
+                expression_sql=str(col),
+            )
 
         for scope_record in scope_registry.iter_scopes():
             for col in self._collect_entity_and_group_columns(scope_record.expression, list(feature_spec.entity_keys or (feature_spec.entity_key,))):
@@ -77,8 +84,15 @@ class FeatureLineageExtractor:
                 for col in columns:
                     resolved = resolver.resolve_column(scope_record.scope_name, col.copy())
                     self._merge_resolution(graph, resolved)
-                    for terminal_id in resolved.terminal_node_ids:
-                        graph.add_edge(DependencyEdge(from_node=terminal_id, to_node=final_node_id, dependency_type=dependency_type, clause_type=clause_type, scope_name=scope_record.scope_name, expression_sql=str(col)))
+                    self._attach_resolution_context_edges(
+                        graph=graph,
+                        resolved=resolved,
+                        target_node_id=final_node_id,
+                        dependency_type=dependency_type,
+                        clause_type=clause_type,
+                        scope_name=scope_record.scope_name,
+                        expression_sql=str(col),
+                    )
 
         role_sources = self.classifier.classify_source_columns_by_role(graph, final_node_id)
         source_columns = sorted(set(role_sources['value'] + role_sources['filter'] + role_sources['join'] + role_sources['group']))
@@ -153,3 +167,42 @@ class FeatureLineageExtractor:
                         seen.add(sql)
                         columns.append(expr)
         return columns
+    def _attach_resolution_context_edges(self, graph: DependencyGraph, resolved, target_node_id: str, dependency_type: str, clause_type: str, scope_name: str, expression_sql: str | None) -> None:
+        for terminal_id in resolved.terminal_node_ids:
+            graph.add_edge(DependencyEdge(
+                from_node=terminal_id,
+                to_node=target_node_id,
+                dependency_type=dependency_type,
+                clause_type=clause_type,
+                scope_name=scope_name,
+                expression_sql=expression_sql,
+            ))
+
+        # For value-context through UNION/set outputs, also attach direct value edges
+        # from all upstream source columns that feed the set/relation output. This
+        # keeps both UNION branches visible to role classification even when one
+        # branch only reaches the target through a synthetic set_output node.
+        if dependency_type != 'value':
+            return
+
+        visited = set()
+        stack = list(resolved.terminal_node_ids)
+        while stack:
+            node_id = stack.pop()
+            if node_id in visited:
+                continue
+            visited.add(node_id)
+            node = graph.nodes.get(node_id)
+            if node is not None and node.node_type == 'source_column':
+                graph.add_edge(DependencyEdge(
+                    from_node=node_id,
+                    to_node=target_node_id,
+                    dependency_type='value',
+                    clause_type=clause_type,
+                    scope_name=scope_name,
+                    expression_sql=expression_sql,
+                ))
+                continue
+            for upstream_id in graph.upstream(node_id):
+                stack.append(upstream_id)
+

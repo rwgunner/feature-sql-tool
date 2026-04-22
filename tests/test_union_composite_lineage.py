@@ -20,6 +20,7 @@ def test_union_lineage_resolves_sources_without_unresolved() -> None:
     assert any(item.endswith('dm_payments_archive.amount') for item in result.source_columns)
     assert any(item.endswith('dm_payments_current.payment_status') for item in result.source_columns)
     assert any(item.endswith('dm_payments_archive.channel') for item in result.source_columns)
+    assert any(item.endswith('dm_payments_archive.payment_status') for item in result.source_columns)
 
 
 def test_union_lineage_intermediate_and_group_roles() -> None:
@@ -33,6 +34,8 @@ def test_union_lineage_intermediate_and_group_roles() -> None:
 
     assert any(item.endswith('.client_id') for item in result.group_source_columns)
     assert any(item.endswith('.payment_id') for item in result.group_source_columns)
+    assert any(item.endswith('dm_payments_archive.amount') for item in result.value_source_columns)
+    assert any(item.endswith('dm_payments_current.amount') for item in result.value_source_columns)
     assert result.value_source_columns
 
 

@@ -65,3 +65,5 @@ tests/test_complex_cte_lineage.py
 tests/test_import.py
 tests/test_smoke_service.py
 tests/test_union_composite_lineage.py
+tests/test_union_value_lineage_symmetry.py
+tests/test_union_value_source_symmetry.py

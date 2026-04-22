@@ -185,8 +185,8 @@ class SqlParser:
 
         left_expr = getattr(set_expression, 'left', None)
         right_expr = getattr(set_expression, 'right', None)
-        left_scope_name = registry.find_scope_name_for_obj(left_expr)
-        right_scope_name = registry.find_scope_name_for_obj(right_expr)
+        left_scope_name = registry.find_scope_name_for_obj(left_expr) or registry.find_scope_name_for_expression(left_expr)
+        right_scope_name = registry.find_scope_name_for_obj(right_expr) or registry.find_scope_name_for_expression(right_expr)
         output_columns = tuple(self._extract_output_columns(set_expression))
         left_output_expressions = tuple(self._extract_output_expressions(left_expr))
         right_output_expressions = tuple(self._extract_output_expressions(right_expr))
@@ -200,6 +200,8 @@ class SqlParser:
                 output_columns=output_columns,
                 left_output_expressions=left_output_expressions,
                 right_output_expressions=right_output_expressions,
+                left_expression=left_expr,
+                right_expression=right_expr,
             ),
         )
 

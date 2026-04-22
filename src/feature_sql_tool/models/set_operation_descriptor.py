@@ -13,3 +13,5 @@ class SetOperationDescriptor:
     output_columns: tuple[str, ...]
     left_output_expressions: tuple[Any, ...] = ()
     right_output_expressions: tuple[Any, ...] = ()
+    left_expression: Any | None = None
+    right_expression: Any | None = None
