@@ -94,8 +94,8 @@ class FeatureLineageExtractor:
                         expression_sql=str(col),
                     )
 
-        role_sources = self.classifier.classify_source_columns_by_role(graph, final_node_id)
-        source_columns = sorted(set(role_sources['value'] + role_sources['filter'] + role_sources['join'] + role_sources['group']))
+        source_columns = self.classifier.classify_source_columns(graph)
+        source_columns = self._supplement_union_source_columns(scope_registry, resolver, source_columns)
 
         return FeatureLineageResult(
             feature_spec=feature_spec,
@@ -104,10 +104,6 @@ class FeatureLineageExtractor:
             source_columns=source_columns,
             intermediate_features=self.classifier.classify_intermediate_features(graph),
             filter_only_intermediate_features=self.filter_only.classify(graph, final_node_id),
-            value_source_columns=role_sources['value'],
-            filter_source_columns=role_sources['filter'],
-            join_source_columns=role_sources['join'],
-            group_source_columns=role_sources['group'],
             unresolved_columns=self.classifier.classify_unresolved_columns(graph),
         )
 
@@ -167,6 +163,52 @@ class FeatureLineageExtractor:
                         seen.add(sql)
                         columns.append(expr)
         return columns
+    def _supplement_union_source_columns(self, scope_registry, resolver, source_columns: list[str]) -> list[str]:
+        """Symmetrically supplement source_columns across UNION branches.
+
+        If a source column from one UNION branch is already present for a given
+        output position, include the resolved source columns from the opposite
+        branch for the same output position as well. This keeps basic
+        source_columns symmetric without bringing back role-based lineage.
+        """
+        columns = set(source_columns)
+
+        for scope_record in scope_registry.iter_scopes():
+            descriptor = scope_record.set_operation
+            if descriptor is None:
+                continue
+
+            max_len = min(len(descriptor.output_columns), len(descriptor.left_output_expressions), len(descriptor.right_output_expressions))
+            for position in range(max_len):
+                left_expr = descriptor.left_output_expressions[position]
+                right_expr = descriptor.right_output_expressions[position]
+
+                left_result = resolver._resolve_branch_expression(
+                    descriptor.left_scope_name,
+                    left_expr,
+                    visited=set(),
+                    branch_expression=descriptor.left_expression,
+                    position=position,
+                )
+                right_result = resolver._resolve_branch_expression(
+                    descriptor.right_scope_name,
+                    right_expr,
+                    visited=set(),
+                    branch_expression=descriptor.right_expression,
+                    position=position,
+                )
+
+                left_sources = {node.node_id for node in left_result.source_nodes}
+                right_sources = {node.node_id for node in right_result.source_nodes}
+                if not left_sources or not right_sources:
+                    continue
+
+                if (columns & left_sources) or (columns & right_sources):
+                    columns.update(left_sources)
+                    columns.update(right_sources)
+
+        return sorted(columns)
+
     def _attach_resolution_context_edges(self, graph: DependencyGraph, resolved, target_node_id: str, dependency_type: str, clause_type: str, scope_name: str, expression_sql: str | None) -> None:
         for terminal_id in resolved.terminal_node_ids:
             graph.add_edge(DependencyEdge(

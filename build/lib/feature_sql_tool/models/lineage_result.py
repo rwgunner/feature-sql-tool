@@ -17,8 +17,4 @@ class FeatureLineageResult:
     intermediate_features: List[str] = field(default_factory=list)
     filter_only_intermediate_features: List[str] = field(default_factory=list)
 
-    value_source_columns: List[str] = field(default_factory=list)
-    filter_source_columns: List[str] = field(default_factory=list)
-    join_source_columns: List[str] = field(default_factory=list)
-    group_source_columns: List[str] = field(default_factory=list)
     unresolved_columns: List[str] = field(default_factory=list)
