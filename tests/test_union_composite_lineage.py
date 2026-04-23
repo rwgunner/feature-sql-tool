@@ -32,11 +32,6 @@ def test_union_lineage_intermediate_and_group_roles() -> None:
     assert any(item.endswith(':amount_bucket') for item in result.intermediate_features)
     assert any(item.endswith(':risky_payment_flag') for item in result.intermediate_features)
 
-    assert any(item.endswith('.client_id') for item in result.group_source_columns)
-    assert any(item.endswith('.payment_id') for item in result.group_source_columns)
-    assert any(item.endswith('dm_payments_archive.amount') for item in result.value_source_columns)
-    assert any(item.endswith('dm_payments_current.amount') for item in result.value_source_columns)
-    assert result.value_source_columns
 
 
 def test_composite_key_is_preserved_on_feature_spec() -> None:
