@@ -4,6 +4,7 @@ README.md
 pyproject.toml
 sql_samples/feature_avg_paid_amount_recent_30d.sql
 sql_samples/feature_avg_payment_30d.sql
+sql_samples/feature_client_payment_risk_score_30d.sql
 sql_samples/feature_cnt_paid_txn_30d.sql
 sql_samples/feature_filter_only_flag.sql
 sql_samples/feature_payment_risk_score.sql
@@ -62,6 +63,7 @@ src/feature_sql_tool/scope/passthrough_detector.py
 src/feature_sql_tool/scope/relation_registry.py
 src/feature_sql_tool/scope/scope_registry.py
 tests/test_complex_cte_lineage.py
+tests/test_cte_sources_fully_physicalized.py
 tests/test_import.py
 tests/test_smoke_service.py
 tests/test_union_composite_lineage.py
