@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlglot import exp
+from sqlglot import exp, parse_one
 
 from feature_sql_tool.graph.dependency_graph import DependencyGraph
 from feature_sql_tool.graph.filter_only_classifier import FilterOnlyClassifier
@@ -95,7 +95,7 @@ class FeatureLineageExtractor:
                     )
 
         source_columns = self.classifier.classify_source_columns(graph)
-        source_columns = self._supplement_union_source_columns(scope_registry, resolver, source_columns)
+        source_columns = self._finalize_source_columns(scope_registry, resolver, graph, source_columns, feature_spec.dialect)
 
         return FeatureLineageResult(
             feature_spec=feature_spec,
@@ -163,52 +163,6 @@ class FeatureLineageExtractor:
                         seen.add(sql)
                         columns.append(expr)
         return columns
-    def _supplement_union_source_columns(self, scope_registry, resolver, source_columns: list[str]) -> list[str]:
-        """Symmetrically supplement source_columns across UNION branches.
-
-        If a source column from one UNION branch is already present for a given
-        output position, include the resolved source columns from the opposite
-        branch for the same output position as well. This keeps basic
-        source_columns symmetric without bringing back role-based lineage.
-        """
-        columns = set(source_columns)
-
-        for scope_record in scope_registry.iter_scopes():
-            descriptor = scope_record.set_operation
-            if descriptor is None:
-                continue
-
-            max_len = min(len(descriptor.output_columns), len(descriptor.left_output_expressions), len(descriptor.right_output_expressions))
-            for position in range(max_len):
-                left_expr = descriptor.left_output_expressions[position]
-                right_expr = descriptor.right_output_expressions[position]
-
-                left_result = resolver._resolve_branch_expression(
-                    descriptor.left_scope_name,
-                    left_expr,
-                    visited=set(),
-                    branch_expression=descriptor.left_expression,
-                    position=position,
-                )
-                right_result = resolver._resolve_branch_expression(
-                    descriptor.right_scope_name,
-                    right_expr,
-                    visited=set(),
-                    branch_expression=descriptor.right_expression,
-                    position=position,
-                )
-
-                left_sources = {node.node_id for node in left_result.source_nodes}
-                right_sources = {node.node_id for node in right_result.source_nodes}
-                if not left_sources or not right_sources:
-                    continue
-
-                if (columns & left_sources) or (columns & right_sources):
-                    columns.update(left_sources)
-                    columns.update(right_sources)
-
-        return sorted(columns)
-
     def _attach_resolution_context_edges(self, graph: DependencyGraph, resolved, target_node_id: str, dependency_type: str, clause_type: str, scope_name: str, expression_sql: str | None) -> None:
         for terminal_id in resolved.terminal_node_ids:
             graph.add_edge(DependencyEdge(
@@ -248,3 +202,101 @@ class FeatureLineageExtractor:
             for upstream_id in graph.upstream(node_id):
                 stack.append(upstream_id)
 
+
+
+    def _finalize_source_columns(self, scope_registry, resolver, graph: DependencyGraph, source_columns: list[str], dialect: str) -> list[str]:
+        supplemented = self._supplement_union_source_columns(scope_registry, resolver, source_columns)
+        supplemented = self._supplement_from_intermediate_expressions(scope_registry, resolver, graph, supplemented, dialect)
+        physicalized: set[str] = set()
+        for source_id in supplemented:
+            physicalized.update(self._resolve_source_id_to_physical(scope_registry, resolver, source_id, set()))
+        return sorted(physicalized)
+
+
+    def _supplement_from_intermediate_expressions(self, scope_registry, resolver, graph: DependencyGraph, source_columns: list[str], dialect: str) -> list[str]:
+        all_sources: set[str] = set(source_columns)
+        for node in graph.nodes.values():
+            if node.node_type != 'intermediate_feature' or not node.scope_name:
+                continue
+
+            expr = None
+            alias_ref = scope_registry.find_alias(node.scope_name, node.name)
+            if alias_ref is not None:
+                expr = alias_ref.expression
+            elif node.expression_sql:
+                try:
+                    expr = parse_one(node.expression_sql, read=dialect)
+                except Exception:
+                    expr = None
+
+            if expr is None:
+                continue
+
+            all_sources.update(self._resolve_expression_source_ids(resolver, node.scope_name, expr))
+        return sorted(all_sources)
+
+    def _resolve_expression_source_ids(self, resolver, scope_name: str, expr) -> set[str]:
+        source_ids: set[str] = set()
+        for col in self.expander.collect_columns(expr):
+            try:
+                resolved = resolver.resolve_column(scope_name, col.copy())
+            except Exception:
+                continue
+            for source_node in resolved.source_nodes:
+                source_ids.add(source_node.node_id)
+        return source_ids
+    def _supplement_union_source_columns(self, scope_registry, resolver, source_columns: list[str]) -> list[str]:
+        all_sources: set[str] = set(source_columns)
+        for scope_record in scope_registry.iter_scopes():
+            descriptor = scope_registry.get_set_operation(scope_record.scope_name)
+            if descriptor is None:
+                continue
+            branch_specs = (
+                (descriptor.left_scope_name, descriptor.left_output_expressions, descriptor.left_expression),
+                (descriptor.right_scope_name, descriptor.right_output_expressions, descriptor.right_expression),
+            )
+            max_len = max(len(descriptor.left_output_expressions or ()), len(descriptor.right_output_expressions or ()))
+            for position in range(max_len):
+                branch_source_sets: list[set[str]] = []
+                for branch_scope_name, branch_outputs, branch_expression in branch_specs:
+                    if position >= len(branch_outputs):
+                        branch_source_sets.append(set())
+                        continue
+                    result = resolver._resolve_branch_expression(branch_scope_name, branch_outputs[position], visited=set(), branch_expression=branch_expression, position=position)
+                    branch_source_sets.append({node.node_id for node in result.source_nodes})
+                if any(s & all_sources for s in branch_source_sets):
+                    for s in branch_source_sets:
+                        all_sources.update(s)
+        return sorted(all_sources)
+
+    def _resolve_source_id_to_physical(self, scope_registry, resolver, source_id: str, visited: set[tuple[str, str]]) -> set[str]:
+        if not source_id.startswith('src:'):
+            return {source_id}
+        body = source_id[4:]
+        if '.' not in body:
+            return {source_id}
+        table_name, column_name = body.rsplit('.', 1)
+        key = (table_name, column_name)
+        if key in visited:
+            return {source_id}
+        next_visited = set(visited)
+        next_visited.add(key)
+
+        source_scope_names: set[str] = set()
+        for scope_record in scope_registry.iter_scopes():
+            for relation in scope_registry.list_relations(scope_record.scope_name):
+                if relation.relation_name == table_name or relation.alias_name == table_name:
+                    if relation.source_scope_name:
+                        source_scope_names.add(relation.source_scope_name)
+        if not source_scope_names:
+            return {source_id}
+
+        physicalized: set[str] = set()
+        for source_scope_name in source_scope_names:
+            result = resolver._resolve_output_column(source_scope_name, column_name, visited=set())
+            if result.source_nodes:
+                for node in result.source_nodes:
+                    physicalized.update(self._resolve_source_id_to_physical(scope_registry, resolver, node.node_id, next_visited))
+            else:
+                physicalized.add(source_id)
+        return physicalized or {source_id}
