@@ -33,13 +33,13 @@ class FeatureLineageExtractor:
         resolver = ColumnResolver(scope_registry)
         filter_collector = FilterDependencyCollector()
 
-        final_expr_ref = scope_registry.find_alias(root_scope_name, feature_spec.final_alias)
+        self._validate_entity_keys_in_final_select(feature_spec.feature_name, root_record.expression, tuple(feature_spec.entity_keys or ()))
+
+        final_expr_ref = scope_registry.find_alias(root_scope_name, feature_spec.feature_name)
         if final_expr_ref is None:
-            final_expr = self._find_final_expression(root_record.expression, feature_spec.final_alias)
+            final_expr = self._find_final_expression(root_record.expression, feature_spec.feature_name)
             if final_expr is None:
-                raise ValueError(
-                    f"Final alias '{feature_spec.final_alias}' was not found in root scope for feature '{feature_spec.feature_name}'"
-                )
+                raise ValueError(f"Final alias '{feature_spec.feature_name}' was not found in root scope for feature '{feature_spec.feature_name}'")
             final_expr_sql = self.normalizer.normalize_expression_sql(final_expr, feature_spec.dialect)
         else:
             final_expr = final_expr_ref.expression
@@ -53,7 +53,7 @@ class FeatureLineageExtractor:
                 name=feature_spec.feature_name,
                 scope_name=root_scope_name,
                 expression_sql=final_expr_sql,
-                grain=feature_spec.grain,
+                grain=','.join(feature_spec.entity_keys or ()),
                 feature_name=feature_spec.feature_name,
             )
         )
@@ -61,59 +61,41 @@ class FeatureLineageExtractor:
         for col in self.expander.collect_columns(final_expr):
             resolved = resolver.resolve_column(root_scope_name, col.copy())
             self._merge_resolution(graph, resolved)
-            for terminal_id in resolved.terminal_node_ids:
-                graph.add_edge(
-                    DependencyEdge(
-                        from_node=terminal_id,
-                        to_node=final_node_id,
-                        dependency_type='value',
-                        clause_type='select',
-                        scope_name=root_scope_name,
-                        expression_sql=str(col),
-                    )
-                )
-
-        for col in self._collect_entity_and_group_columns(root_record.expression, feature_spec.entity_key):
-            resolved = resolver.resolve_column(root_scope_name, col.copy())
-            self._merge_resolution(graph, resolved)
-            for terminal_id in resolved.terminal_node_ids:
-                graph.add_edge(
-                    DependencyEdge(
-                        from_node=terminal_id,
-                        to_node=final_node_id,
-                        dependency_type='group',
-                        clause_type='group_by',
-                        scope_name=root_scope_name,
-                        expression_sql=str(col),
-                    )
-                )
+            self._attach_resolution_context_edges(
+                graph=graph,
+                resolved=resolved,
+                target_node_id=final_node_id,
+                dependency_type='value',
+                clause_type='select',
+                scope_name=root_scope_name,
+                expression_sql=str(col),
+            )
 
         for scope_record in scope_registry.iter_scopes():
+            for col in self._collect_entity_and_group_columns(scope_record.expression, list(feature_spec.entity_keys or (feature_spec.entity_key,))):
+                resolved = resolver.resolve_column(scope_record.scope_name, col.copy())
+                self._merge_resolution(graph, resolved)
+                for terminal_id in resolved.terminal_node_ids:
+                    graph.add_edge(DependencyEdge(from_node=terminal_id, to_node=final_node_id, dependency_type='group', clause_type='group_by', scope_name=scope_record.scope_name, expression_sql=str(col)))
+
             filters = filter_collector.collect(scope_record.expression)
             for clause_type, columns in filters.items():
                 dependency_type = 'join' if clause_type == 'join_on' else 'filter'
                 for col in columns:
                     resolved = resolver.resolve_column(scope_record.scope_name, col.copy())
                     self._merge_resolution(graph, resolved)
-                    for terminal_id in resolved.terminal_node_ids:
-                        graph.add_edge(
-                            DependencyEdge(
-                                from_node=terminal_id,
-                                to_node=final_node_id,
-                                dependency_type=dependency_type,
-                                clause_type=clause_type,
-                                scope_name=scope_record.scope_name,
-                                expression_sql=str(col),
-                            )
-                        )
+                    self._attach_resolution_context_edges(
+                        graph=graph,
+                        resolved=resolved,
+                        target_node_id=final_node_id,
+                        dependency_type=dependency_type,
+                        clause_type=clause_type,
+                        scope_name=scope_record.scope_name,
+                        expression_sql=str(col),
+                    )
 
-        role_sources = self.classifier.classify_source_columns_by_role(graph, final_node_id)
-        source_columns = sorted(set(
-            role_sources['value']
-            + role_sources['filter']
-            + role_sources['join']
-            + role_sources['group']
-        ))
+        source_columns = self.classifier.classify_source_columns(graph)
+        source_columns = self._supplement_union_source_columns(scope_registry, resolver, source_columns)
 
         return FeatureLineageResult(
             feature_spec=feature_spec,
@@ -122,10 +104,6 @@ class FeatureLineageExtractor:
             source_columns=source_columns,
             intermediate_features=self.classifier.classify_intermediate_features(graph),
             filter_only_intermediate_features=self.filter_only.classify(graph, final_node_id),
-            value_source_columns=role_sources['value'],
-            filter_source_columns=role_sources['filter'],
-            join_source_columns=role_sources['join'],
-            group_source_columns=role_sources['group'],
             unresolved_columns=self.classifier.classify_unresolved_columns(graph),
         )
 
@@ -138,11 +116,26 @@ class FeatureLineageExtractor:
     def _find_final_expression(self, expression, final_alias: str):
         select_items = getattr(expression, 'expressions', []) or []
         for item in select_items:
-            if getattr(item, 'alias_or_name', None) == final_alias:
+            alias_or_name = getattr(item, 'alias_or_name', None)
+            if alias_or_name == final_alias:
                 return item.this if isinstance(item, exp.Alias) else item
         return None
 
-    def _collect_entity_and_group_columns(self, expression, entity_key: str) -> list[exp.Column]:
+    def _validate_entity_keys_in_final_select(self, feature_name: str, expression, entity_keys: tuple[str, ...]) -> None:
+        select_items = getattr(expression, 'expressions', []) or []
+        select_names = set()
+        for item in select_items:
+            alias_or_name = getattr(item, 'alias_or_name', None)
+            if alias_or_name:
+                select_names.add(alias_or_name)
+            elif isinstance(item, exp.Column):
+                select_names.add(item.name)
+        missing = [key for key in entity_keys if key not in select_names]
+        if missing:
+            missing_fmt = ', '.join(repr(m) for m in missing)
+            raise ValueError(f"Feature '{feature_name}': final SELECT does not contain entity key(s) {missing_fmt}")
+
+    def _collect_entity_and_group_columns(self, expression, entity_keys: list[str]) -> list[exp.Column]:
         columns: list[exp.Column] = []
         seen: set[str] = set()
 
@@ -157,11 +150,101 @@ class FeatureLineageExtractor:
         select_items = getattr(expression, 'expressions', []) or []
         for item in select_items:
             alias_name = getattr(item, 'alias_or_name', None)
-            if alias_name == entity_key:
+            if alias_name in entity_keys:
                 expr = item.this if isinstance(item, exp.Alias) else item
                 for col in self.expander.collect_columns(expr):
                     sql = col.sql()
                     if sql not in seen:
                         seen.add(sql)
                         columns.append(col)
+                if isinstance(expr, exp.Column):
+                    sql = expr.sql()
+                    if sql not in seen:
+                        seen.add(sql)
+                        columns.append(expr)
         return columns
+    def _supplement_union_source_columns(self, scope_registry, resolver, source_columns: list[str]) -> list[str]:
+        """Symmetrically supplement source_columns across UNION branches.
+
+        If a source column from one UNION branch is already present for a given
+        output position, include the resolved source columns from the opposite
+        branch for the same output position as well. This keeps basic
+        source_columns symmetric without bringing back role-based lineage.
+        """
+        columns = set(source_columns)
+
+        for scope_record in scope_registry.iter_scopes():
+            descriptor = scope_record.set_operation
+            if descriptor is None:
+                continue
+
+            max_len = min(len(descriptor.output_columns), len(descriptor.left_output_expressions), len(descriptor.right_output_expressions))
+            for position in range(max_len):
+                left_expr = descriptor.left_output_expressions[position]
+                right_expr = descriptor.right_output_expressions[position]
+
+                left_result = resolver._resolve_branch_expression(
+                    descriptor.left_scope_name,
+                    left_expr,
+                    visited=set(),
+                    branch_expression=descriptor.left_expression,
+                    position=position,
+                )
+                right_result = resolver._resolve_branch_expression(
+                    descriptor.right_scope_name,
+                    right_expr,
+                    visited=set(),
+                    branch_expression=descriptor.right_expression,
+                    position=position,
+                )
+
+                left_sources = {node.node_id for node in left_result.source_nodes}
+                right_sources = {node.node_id for node in right_result.source_nodes}
+                if not left_sources or not right_sources:
+                    continue
+
+                if (columns & left_sources) or (columns & right_sources):
+                    columns.update(left_sources)
+                    columns.update(right_sources)
+
+        return sorted(columns)
+
+    def _attach_resolution_context_edges(self, graph: DependencyGraph, resolved, target_node_id: str, dependency_type: str, clause_type: str, scope_name: str, expression_sql: str | None) -> None:
+        for terminal_id in resolved.terminal_node_ids:
+            graph.add_edge(DependencyEdge(
+                from_node=terminal_id,
+                to_node=target_node_id,
+                dependency_type=dependency_type,
+                clause_type=clause_type,
+                scope_name=scope_name,
+                expression_sql=expression_sql,
+            ))
+
+        # For value-context through UNION/set outputs, also attach direct value edges
+        # from all upstream source columns that feed the set/relation output. This
+        # keeps both UNION branches visible to role classification even when one
+        # branch only reaches the target through a synthetic set_output node.
+        if dependency_type != 'value':
+            return
+
+        visited = set()
+        stack = list(resolved.terminal_node_ids)
+        while stack:
+            node_id = stack.pop()
+            if node_id in visited:
+                continue
+            visited.add(node_id)
+            node = graph.nodes.get(node_id)
+            if node is not None and node.node_type == 'source_column':
+                graph.add_edge(DependencyEdge(
+                    from_node=node_id,
+                    to_node=target_node_id,
+                    dependency_type='value',
+                    clause_type=clause_type,
+                    scope_name=scope_name,
+                    expression_sql=expression_sql,
+                ))
+                continue
+            for upstream_id in graph.upstream(node_id):
+                stack.append(upstream_id)
+
