@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from sqlglot import exp, parse_one
+
 from feature_sql_tool.models.query_plan import FeatureQueryPlan
 from feature_sql_tool.models.query_stage import QueryStage
 from feature_sql_tool.models.reusable_stage import ReusableStage
@@ -49,7 +51,9 @@ class AggregateMerger:
                 if alias in group_key_aliases:
                     continue
                 select_items.append((alias, expr))
-            raw_sql = self._render_stage(first_stage, upstream_name, select_items)
+
+            from_sql = self._remap_from_sql(first_stage.from_sql, upstream_name)
+            raw_sql = self._render_stage(first_stage, from_sql, select_items)
             reusable_stage = ReusableStage(
                 reusable_stage_id=f'reusable::{name}',
                 reusable_name=name,
@@ -62,7 +66,7 @@ class AggregateMerger:
                 filter_signatures=first_stage.filter_signatures,
                 expression_signatures=tuple(expr for _, expr in select_items),
                 select_items=tuple(select_items),
-                from_sql=f'FROM {upstream_name}',
+                from_sql=from_sql,
                 where_sql=first_stage.where_sql,
                 group_sql=first_stage.group_sql,
                 having_sql=first_stage.having_sql,
@@ -75,8 +79,8 @@ class AggregateMerger:
                 stage_mapping[(feature_name, stage.stage_name)] = name
         return reusable, stage_mapping
 
-    def _render_stage(self, stage: QueryStage, upstream_name: str, select_items: list[tuple[str, str]]) -> str:
-        lines = ['SELECT', '    ' + ',\n    '.join(f"{expr} AS {alias}" for alias, expr in select_items), f'FROM {upstream_name}']
+    def _render_stage(self, stage: QueryStage, from_sql: str, select_items: list[tuple[str, str]]) -> str:
+        lines = ['SELECT', '    ' + ',\n    '.join(f"{expr} AS {alias}" for alias, expr in select_items), from_sql]
         if stage.where_sql:
             lines.append(stage.where_sql)
         if stage.group_sql:
@@ -86,3 +90,22 @@ class AggregateMerger:
         if stage.qualify_sql:
             lines.append(stage.qualify_sql)
         return '\n'.join(lines)
+
+    def _remap_from_sql(self, from_sql: str, upstream_name: str) -> str:
+        if not from_sql:
+            return f'FROM {upstream_name}'
+        try:
+            wrapper = parse_one(f'SELECT 1 {from_sql}')
+            from_expr = wrapper.args.get('from')
+            if from_expr is None:
+                return f'FROM {upstream_name}'
+            replaced = False
+            for table in from_expr.find_all(exp.Table):
+                table.set('this', exp.to_identifier(upstream_name))
+                replaced = True
+                break
+            if not replaced:
+                return f'FROM {upstream_name}'
+            return from_expr.sql(pretty=False)
+        except Exception:
+            return f'FROM {upstream_name}'

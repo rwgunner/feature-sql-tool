@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from sqlglot import parse_one, exp
+
 from feature_sql_tool.models.query_plan import FeatureQueryPlan
 from feature_sql_tool.models.query_stage import QueryStage
 from feature_sql_tool.models.reusable_stage import ReusableStage

@@ -85,8 +85,11 @@ class QueryGraphBuilder:
         return expression
 
     def _select_items(self, expression: Any, dialect: str) -> list[tuple[str, str]]:
+        target = expression
+        if isinstance(expression, exp.SetOperation):
+            target = expression.left
         items = []
-        for idx, item in enumerate(getattr(expression, 'expressions', []) or []):
+        for idx, item in enumerate(getattr(target, 'expressions', []) or []):
             alias = getattr(item, 'alias_or_name', None)
             if not alias:
                 if isinstance(item, exp.Column):

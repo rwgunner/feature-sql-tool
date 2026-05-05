@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from feature_sql_tool.generator.reusable_sql_builder import ReusableSqlBuilder
 from feature_sql_tool.generator.unified_sql_builder import UnifiedSqlBuilder
 from feature_sql_tool.graph.unified_graph_builder import UnifiedFeatureGraphBuilder
 from feature_sql_tool.lineage.extractor import FeatureLineageExtractor
@@ -11,7 +12,6 @@ from feature_sql_tool.planner.execution_planner import ExecutionPlanner
 from feature_sql_tool.planner.reusable_execution_planner import ReusableExecutionPlanner
 from feature_sql_tool.planner.reusable_subgraph_detector import ReusableSubgraphDetector
 from feature_sql_tool.reporting.optimization_reporter import OptimizationReporter
-from feature_sql_tool.generator.reusable_sql_builder import ReusableSqlBuilder
 
 
 class FeatureSqlTool:
@@ -85,10 +85,24 @@ class FeatureSqlTool:
             raise NotImplementedError('Optimized unified SQL generation for composite entity_keys is not implemented yet.')
         return self.reusable_planner.build(request)
 
-    def build_optimized_unified_sql(self, request_or_features) -> str:
+    def build_optimized_unified_sql(self, request_or_features, strict_mode: bool = False, fallback_to_legacy: bool = True) -> str:
         request = self._ensure_request(request_or_features)
         if len(request.entity_keys or ()) > 1:
             raise NotImplementedError('Optimized unified SQL generation for composite entity_keys is not implemented yet.')
-        plan = self.build_optimized_execution_plan(request)
-        return self.reusable_sql_builder.build(request, plan)
-
+        try:
+            plan = self.build_optimized_execution_plan(request)
+            sql = self.reusable_sql_builder.build(request, plan)
+            broken_markers = (
+                'FROM payment_base',
+                'FROM client_profile',
+                'FROM risky_events_agg',
+                'SELECT\n)',
+                'SELECT\r\n)',
+            )
+            if any(marker in sql for marker in broken_markers):
+                raise ValueError('Optimized SQL failed post-build safety checks')
+            return sql
+        except Exception:
+            if strict_mode or not fallback_to_legacy:
+                raise
+            return self.build_unified_sql(request)
