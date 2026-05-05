@@ -5,9 +5,11 @@ pyproject.toml
 sql_samples/feature_avg_paid_amount_recent_30d.sql
 sql_samples/feature_avg_payment_30d.sql
 sql_samples/feature_client_payment_risk_score_30d.sql
+sql_samples/feature_cnt_dep_act.sql
 sql_samples/feature_cnt_paid_txn_30d.sql
 sql_samples/feature_filter_only_flag.sql
 sql_samples/feature_payment_risk_score.sql
+sql_samples/feature_sum_dep_now.sql
 sql_samples/feature_total_paid_active_30d.sql
 src/feature_sql_tool/__init__.py
 src/feature_sql_tool/service.py
@@ -19,6 +21,7 @@ src/feature_sql_tool.egg-info/top_level.txt
 src/feature_sql_tool/generator/__init__.py
 src/feature_sql_tool/generator/cte_renderer.py
 src/feature_sql_tool/generator/final_select_renderer.py
+src/feature_sql_tool/generator/reusable_sql_builder.py
 src/feature_sql_tool/generator/unified_sql_builder.py
 src/feature_sql_tool/graph/__init__.py
 src/feature_sql_tool/graph/canonicalizer.py
@@ -40,8 +43,11 @@ src/feature_sql_tool/models/feature_spec.py
 src/feature_sql_tool/models/graph.py
 src/feature_sql_tool/models/lineage_result.py
 src/feature_sql_tool/models/parse_result.py
+src/feature_sql_tool/models/query_plan.py
+src/feature_sql_tool/models/query_stage.py
 src/feature_sql_tool/models/relation_descriptor.py
 src/feature_sql_tool/models/resolved_column.py
+src/feature_sql_tool/models/reusable_stage.py
 src/feature_sql_tool/models/reusable_subgraph.py
 src/feature_sql_tool/models/set_operation_descriptor.py
 src/feature_sql_tool/models/vector_build_request.py
@@ -50,9 +56,15 @@ src/feature_sql_tool/parser/ast_normalizer.py
 src/feature_sql_tool/parser/sql_loader.py
 src/feature_sql_tool/parser/sql_parser.py
 src/feature_sql_tool/planner/__init__.py
+src/feature_sql_tool/planner/aggregate_merger.py
 src/feature_sql_tool/planner/aggregate_step_builder.py
+src/feature_sql_tool/planner/common_subgraph_merger.py
 src/feature_sql_tool/planner/execution_planner.py
+src/feature_sql_tool/planner/node_canonicalizer.py
+src/feature_sql_tool/planner/query_graph_builder.py
 src/feature_sql_tool/planner/relation_step_builder.py
+src/feature_sql_tool/planner/required_columns_propagator.py
+src/feature_sql_tool/planner/reusable_execution_planner.py
 src/feature_sql_tool/planner/reusable_subgraph_detector.py
 src/feature_sql_tool/reporting/__init__.py
 src/feature_sql_tool/reporting/lineage_reporter.py
@@ -65,6 +77,7 @@ src/feature_sql_tool/scope/scope_registry.py
 tests/test_complex_cte_lineage.py
 tests/test_cte_sources_fully_physicalized.py
 tests/test_import.py
+tests/test_optimized_sql_planner.py
 tests/test_smoke_service.py
 tests/test_union_composite_lineage.py
 tests/test_union_value_lineage_symmetry.py
