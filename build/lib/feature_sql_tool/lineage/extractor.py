@@ -220,14 +220,6 @@ class FeatureLineageExtractor:
                 continue
 
             expr = None
-            if hasattr(scope_registry, 'has_scope') and not scope_registry.has_scope(node.scope_name):
-                # Synthetic set-operation branch nodes (for example, __set_branch__)
-                # are created while resolving UNION/UNION ALL outputs. They are not
-                # registered query scopes, so they cannot be looked up in the scope
-                # registry. Their upstream source edges are already present in the
-                # dependency graph, so there is nothing extra to supplement here.
-                continue
-
             alias_ref = scope_registry.find_alias(node.scope_name, node.name)
             if alias_ref is not None:
                 expr = alias_ref.expression

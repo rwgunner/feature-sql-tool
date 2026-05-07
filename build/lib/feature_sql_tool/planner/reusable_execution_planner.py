@@ -59,7 +59,7 @@ class ReusableExecutionPlanner:
                 plan.aggregate_steps.append(step)
 
         step_names = [plan.feature_to_step_name[f.feature_name] for f in request.features]
-        plan.entity_step = ExecutionStep('entity_base', self._build_entity_sql(tuple(request.entity_keys or (request.entity_key,)), step_names), 'entity')
+        plan.entity_step = ExecutionStep('entity_base', self._build_entity_sql(request.entity_key, step_names), 'entity')
         plan.final_step = ExecutionStep('final_select', '-- rendered by UnifiedSqlBuilder', 'final_select')
         self.validator.validate(plan)
         return plan
@@ -95,7 +95,6 @@ class ReusableExecutionPlanner:
                 table.set('this', exp.to_identifier(new_name))
         return expr.sql(pretty=False)
 
-    def _build_entity_sql(self, entity_keys: tuple[str, ...], step_names: list[str]) -> str:
-        key_sql = ', '.join(entity_keys)
-        selects = [f'SELECT DISTINCT {key_sql} FROM {step}' for step in step_names]
+    def _build_entity_sql(self, entity_key: str, step_names: list[str]) -> str:
+        selects = [f'SELECT DISTINCT {entity_key} FROM {step}' for step in step_names]
         return '\nUNION\n'.join(selects)
