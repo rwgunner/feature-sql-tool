@@ -59,22 +59,16 @@ class FeatureSqlTool:
 
     def build_execution_plan(self, request_or_features):
         request = self._ensure_request(request_or_features)
-        if len(request.entity_keys or ()) > 1:
-            raise NotImplementedError('Unified SQL generation for composite entity_keys is not implemented yet. Use analyze_features/build_unified_graph for composite-key features.')
         results = self.analyze_features(request.features)
         return self.planner.build_plan(results, request)
 
     def build_unified_sql(self, request_or_features) -> str:
         request = self._ensure_request(request_or_features)
-        if len(request.entity_keys or ()) > 1:
-            raise NotImplementedError('Unified SQL generation for composite entity_keys is not implemented yet. Use analyze_features/build_unified_graph for composite-key features.')
         plan = self.build_execution_plan(request)
         return self.sql_builder.build(request, plan)
 
     def build_optimization_report(self, request_or_features) -> str:
         request = self._ensure_request(request_or_features)
-        if len(request.entity_keys or ()) > 1:
-            raise NotImplementedError('Optimization report for composite entity_keys is not implemented yet.')
         results = self.analyze_features(request.features)
         unified_graph = self.unified_builder.build(results)
         reusable = self.reusable_detector.detect(unified_graph)
@@ -84,13 +78,14 @@ class FeatureSqlTool:
     def build_optimized_execution_plan(self, request_or_features):
         request = self._ensure_request(request_or_features)
         if len(request.entity_keys or ()) > 1:
-            raise NotImplementedError('Optimized unified SQL generation for composite entity_keys is not implemented yet.')
+            raise NotImplementedError(
+                'Reusable execution plan API for composite entity_keys is not implemented yet. '
+                'Use build_optimized_unified_sql() for optimized composite-key SQL generation.'
+            )
         return self.reusable_planner.build(request)
 
     def build_optimized_unified_sql(self, request_or_features, strict_mode: bool = False, fallback_to_legacy: bool = True) -> str:
         request = self._ensure_request(request_or_features)
-        if len(request.entity_keys or ()) > 1:
-            raise NotImplementedError('Optimized unified SQL generation for composite entity_keys is not implemented yet.')
         try:
             lineage_results = self.analyze_features(request.features)
             legacy_plan = self.planner.build_plan(lineage_results, request)
