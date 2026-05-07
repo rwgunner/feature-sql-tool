@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from feature_sql_tool.generator.reusable_sql_builder import ReusableSqlBuilder
 from feature_sql_tool.generator.unified_sql_builder import UnifiedSqlBuilder
 from feature_sql_tool.graph.unified_graph_builder import UnifiedFeatureGraphBuilder
 from feature_sql_tool.lineage.extractor import FeatureLineageExtractor
 from feature_sql_tool.models.feature_spec import FeatureSpec
 from feature_sql_tool.models.vector_build_request import VectorBuildRequest
 from feature_sql_tool.planner.execution_planner import ExecutionPlanner
+from feature_sql_tool.planner.reusable_execution_planner import ReusableExecutionPlanner
 from feature_sql_tool.planner.reusable_subgraph_detector import ReusableSubgraphDetector
+from feature_sql_tool.planner.simple_reuse_optimizer import SimpleReuseOptimizer
 from feature_sql_tool.reporting.optimization_reporter import OptimizationReporter
 
 
@@ -20,6 +23,9 @@ class FeatureSqlTool:
         self.sql_builder = UnifiedSqlBuilder()
         self.reusable_detector = ReusableSubgraphDetector()
         self.optimization_reporter = OptimizationReporter()
+        self.reusable_planner = ReusableExecutionPlanner()
+        self.reusable_sql_builder = ReusableSqlBuilder()
+        self.simple_reuse_optimizer = SimpleReuseOptimizer()
 
     def _validate_same_entity_keys(self, features: list[FeatureSpec], method_name: str) -> tuple[str, ...]:
         if not features:
@@ -74,3 +80,28 @@ class FeatureSqlTool:
         reusable = self.reusable_detector.detect(unified_graph)
         plan = self.planner.build_plan(results, request)
         return self.optimization_reporter.to_json(plan, reusable)
+
+    def build_optimized_execution_plan(self, request_or_features):
+        request = self._ensure_request(request_or_features)
+        if len(request.entity_keys or ()) > 1:
+            raise NotImplementedError('Optimized unified SQL generation for composite entity_keys is not implemented yet.')
+        return self.reusable_planner.build(request)
+
+    def build_optimized_unified_sql(self, request_or_features, strict_mode: bool = False, fallback_to_legacy: bool = True) -> str:
+        request = self._ensure_request(request_or_features)
+        if len(request.entity_keys or ()) > 1:
+            raise NotImplementedError('Optimized unified SQL generation for composite entity_keys is not implemented yet.')
+        try:
+            lineage_results = self.analyze_features(request.features)
+            legacy_plan = self.planner.build_plan(lineage_results, request)
+            optimized_plan = self.simple_reuse_optimizer.optimize(request, legacy_plan) or legacy_plan
+            sql = self.sql_builder.build(request, optimized_plan)
+            # Do not reject optimized SQL by substring heuristics here.
+            # Earlier versions used broad post-build string checks and produced
+            # false positives for valid nested CTE SQL. Structural validation
+            # should live in planner tests/validators, not in the public builder.
+            return sql
+        except Exception:
+            if strict_mode or not fallback_to_legacy:
+                raise
+            return self.build_unified_sql(request)
