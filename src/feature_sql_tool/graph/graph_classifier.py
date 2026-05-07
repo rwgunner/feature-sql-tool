@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from feature_sql_tool.graph.dependency_graph import DependencyGraph
+from feature_sql_tool.graph.node_filters import is_synthetic_intermediate_feature
 
 
 class GraphClassifier:
@@ -8,7 +9,11 @@ class GraphClassifier:
         return sorted(node_id for node_id, node in graph.nodes.items() if node.node_type == 'source_column')
 
     def classify_intermediate_features(self, graph: DependencyGraph) -> list[str]:
-        return sorted(node_id for node_id, node in graph.nodes.items() if node.node_type == 'intermediate_feature')
+        return sorted(
+            node_id
+            for node_id, node in graph.nodes.items()
+            if node.node_type == 'intermediate_feature' and not is_synthetic_intermediate_feature(node)
+        )
 
     def classify_unresolved_columns(self, graph: DependencyGraph) -> list[str]:
         return sorted(node_id for node_id, node in graph.nodes.items() if node.node_type == 'unresolved_column')

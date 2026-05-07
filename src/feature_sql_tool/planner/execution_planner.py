@@ -16,8 +16,8 @@ from feature_sql_tool.parser.sql_parser import SqlParser
 @dataclass(frozen=True)
 class QueryShape:
     feature_name: str
-    entity_key: str
-    entity_expr_sql: str
+    entity_keys: tuple[str, ...]
+    entity_expr_sqls: tuple[str, ...]
     final_expr_sql: str
     with_sql: str
     from_sql: str
@@ -41,7 +41,7 @@ class QueryShape:
             self.group_sql,
             self.having_sql,
             self.qualify_sql,
-            self.entity_expr_sql,
+            self.entity_expr_sqls,
         )
 
 
@@ -77,7 +77,7 @@ class ExecutionPlanner:
             entity_sql = request.entity_sql_file_path.read_text(encoding='utf-8')
             plan.entity_step = ExecutionStep(step_name='entity_base', sql=entity_sql, step_type='entity')
         elif plan.feature_to_step_name:
-            entity_sql = self._build_entity_sql(request.entity_key, list(dict.fromkeys(plan.feature_to_step_name.values())))
+            entity_sql = self._build_entity_sql(tuple(request.entity_keys or (request.entity_key,)), list(dict.fromkeys(plan.feature_to_step_name.values())))
             plan.entity_step = ExecutionStep(step_name='entity_base', sql=entity_sql, step_type='entity')
 
         plan.final_step = ExecutionStep(step_name='final_select', sql='-- rendered by UnifiedSqlBuilder', step_type='final_select')
@@ -89,21 +89,25 @@ class ExecutionPlanner:
         if root is None:
             raise ValueError(f"Unable to parse expression for feature '{result.feature_spec.feature_name}'")
 
-        with_sql = self._clause_sql(root.args.get('with'), result.feature_spec.dialect)
-        from_sql = self._clause_sql(root.args.get('from'), result.feature_spec.dialect)
+        with_sql = self._clause_sql((root.args.get('with') or root.args.get('with_')), result.feature_spec.dialect)
+        from_sql = self._clause_sql((root.args.get('from') or root.args.get('from_')), result.feature_spec.dialect)
         joins = tuple(self._clause_sql(join, result.feature_spec.dialect) for join in (root.args.get('joins') or []))
         where_sql = self._clause_sql(root.args.get('where'), result.feature_spec.dialect)
         group_sql = self._clause_sql(root.args.get('group'), result.feature_spec.dialect)
         having_sql = self._clause_sql(root.args.get('having'), result.feature_spec.dialect)
         qualify_sql = self._clause_sql(root.args.get('qualify'), result.feature_spec.dialect)
 
-        entity_expr_sql = self._find_select_expression_sql(root, result.feature_spec.entity_key, result.feature_spec.dialect)
+        entity_keys = tuple(result.feature_spec.entity_keys or (result.feature_spec.entity_key,))
+        entity_expr_sqls = tuple(
+            self._find_select_expression_sql(root, key, result.feature_spec.dialect)
+            for key in entity_keys
+        )
         final_expr_sql = self._find_select_expression_sql(root, result.feature_spec.feature_name, result.feature_spec.dialect)
 
         return QueryShape(
             feature_name=result.feature_spec.feature_name,
-            entity_key=result.feature_spec.entity_key,
-            entity_expr_sql=entity_expr_sql,
+            entity_keys=entity_keys,
+            entity_expr_sqls=entity_expr_sqls,
             final_expr_sql=final_expr_sql,
             with_sql=with_sql,
             from_sql=from_sql,
@@ -126,7 +130,10 @@ class ExecutionPlanner:
 
     def _build_group_cte_sql(self, shapes: list[QueryShape]) -> str:
         first = shapes[0]
-        select_lines = [f"{first.entity_expr_sql} AS {first.entity_key}"]
+        select_lines = [
+            f"{expr_sql} AS {key}"
+            for key, expr_sql in zip(first.entity_keys, first.entity_expr_sqls)
+        ]
         for shape in shapes:
             select_lines.append(f"{shape.final_expr_sql} AS {shape.feature_name}")
 
@@ -149,10 +156,12 @@ class ExecutionPlanner:
             parts.append(first.qualify_sql)
         return '\n'.join(parts)
 
-    def _build_entity_sql(self, entity_key: str, step_names: list[str]) -> str:
+    def _build_entity_sql(self, entity_keys: tuple[str, ...], step_names: list[str]) -> str:
+        key_sql = ', '.join(entity_keys)
         if not step_names:
-            return f"SELECT NULL AS {entity_key} WHERE 1 = 0"
-        selects = [f"SELECT DISTINCT {entity_key} FROM {step_name}" for step_name in step_names]
+            null_selects = ', '.join(f"NULL AS {key}" for key in entity_keys)
+            return f"SELECT {null_selects} WHERE 1 = 0"
+        selects = [f"SELECT DISTINCT {key_sql} FROM {step_name}" for step_name in step_names]
         return '\nUNION\n'.join(selects)
 
     def _step_name(self, prefix: str, signature: tuple, idx: int) -> str:

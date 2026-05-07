@@ -13,7 +13,8 @@ class FinalSelectRenderer:
                 return 'SELECT 1'
             base_name = unique_steps[0]
 
-        select_lines = [f"base.{request.entity_key}"]
+        entity_keys = tuple(request.entity_keys or (request.entity_key,))
+        select_lines = [f"base.{key}" for key in entity_keys]
         joined_steps: list[str] = []
         step_aliases: dict[str, str] = {base_name: 'base'}
 
@@ -25,9 +26,8 @@ class FinalSelectRenderer:
             alias = f"s{alias_idx}"
             alias_idx += 1
             step_aliases[step_name] = alias
-            joined_steps.append(
-                f"LEFT JOIN {step_name} {alias} ON base.{request.entity_key} = {alias}.{request.entity_key}"
-            )
+            join_condition = ' AND '.join(f"base.{key} = {alias}.{key}" for key in entity_keys)
+            joined_steps.append(f"LEFT JOIN {step_name} {alias} ON {join_condition}")
 
         for feature in request.features:
             step_name = plan.feature_to_step_name[feature.feature_name]

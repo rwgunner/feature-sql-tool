@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "feature-sql-tool"
-version = "1.4.4"
+version = "2.6.0"
 description = "SQL feature lineage extraction and unified vector SQL planning"
 readme = "README.md"
 requires-python = ">=3.10"

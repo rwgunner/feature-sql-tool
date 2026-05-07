@@ -38,6 +38,9 @@ class ColumnResolver:
         return self._resolve_column(scope_name, column, visited=set())
 
     def _resolve_column(self, scope_name: str, column: exp.Column, visited: Set[Tuple[str, str, str | None]]) -> ColumnResolutionResult:
+        if hasattr(self.scope_registry, 'has_scope') and not self.scope_registry.has_scope(scope_name):
+            return self._make_unresolved(scope_name, column)
+
         key = (scope_name, column.name, column.table)
         if key in visited:
             return self._make_unresolved(scope_name, column)
@@ -54,14 +57,14 @@ class ColumnResolver:
                 if relation.relation_type == 'physical_table':
                     return self._make_source(relation.physical_table_name or column.table, column.name, scope_name)
                 if relation.source_scope_name:
-                    return self._resolve_output_column(relation.source_scope_name, column.name, visited)
+                    return self._resolve_relation_output_column(relation.source_scope_name, column.name, visited)
             fallback = self._resolve_via_scope_runtime(scope_name, column.table, column.name, visited)
             if fallback.resolved_kind != 'unresolved':
                 return fallback
 
         return self._resolve_output_column(scope_name, column.name, visited)
 
-    def _resolve_output_column(self, scope_name: str, column_name: str, visited: Set[Tuple[str, str, str | None]]) -> ColumnResolutionResult:
+    def _resolve_output_column(self, scope_name: str, column_name: str, visited: Set[Tuple[str, str, str | None]], require_declared_output: bool = False) -> ColumnResolutionResult:
         alias_ref = self.scope_registry.find_alias(scope_name, column_name)
         if alias_ref is not None:
             return self._resolve_alias_expression(scope_name, alias_ref, visited)
@@ -70,13 +73,16 @@ class ColumnResolver:
         if set_descriptor is not None:
             return self._resolve_set_operation_output(scope_name, column_name, visited)
 
+        if require_declared_output:
+            return self._make_unresolved(scope_name, exp.column(column_name))
+
         relations = self.scope_registry.list_relations(scope_name)
         candidate_results: List[ColumnResolutionResult] = []
         for relation in relations:
             if relation.relation_type == 'physical_table':
                 candidate_results.append(self._make_source(relation.physical_table_name or relation.relation_name, column_name, scope_name))
             elif relation.source_scope_name:
-                candidate_results.append(self._resolve_output_column(relation.source_scope_name, column_name, visited))
+                candidate_results.append(self._resolve_relation_output_column(relation.source_scope_name, column_name, visited))
 
         candidate_results = [result for result in candidate_results if result.resolved_kind != 'unresolved']
         if len(candidate_results) == 1:
@@ -86,6 +92,14 @@ class ColumnResolver:
 
         unresolved_column = exp.column(column_name)
         return self._make_unresolved(scope_name, unresolved_column)
+
+    def _resolve_relation_output_column(self, source_scope_name: str, column_name: str, visited: Set[Tuple[str, str, str | None]]) -> ColumnResolutionResult:
+        # When a column is referenced through a CTE/subquery relation, resolve only
+        # columns that are actually declared by that relation's SELECT output.
+        # Without this guard, an intermediate alias missing from the relation output
+        # could be incorrectly treated as a physical source column of an upstream
+        # table just because that relation ultimately reads from one table.
+        return self._resolve_output_column(source_scope_name, column_name, visited, require_declared_output=True)
 
     def _resolve_set_operation_output(self, scope_name: str, column_name: str, visited: Set[Tuple[str, str, str | None]]) -> ColumnResolutionResult:
         descriptor = self.scope_registry.get_set_operation(scope_name)
@@ -97,11 +111,27 @@ class ColumnResolver:
         except ValueError:
             return self._make_unresolved(scope_name, exp.column(column_name))
 
-        candidate_results: list[ColumnResolutionResult] = []
         branch_specs = (
             (descriptor.left_scope_name, descriptor.left_output_expressions, descriptor.left_expression),
             (descriptor.right_scope_name, descriptor.right_output_expressions, descriptor.right_expression),
         )
+        return self._resolve_set_position_from_branches(
+            scope_name=scope_name,
+            column_name=column_name,
+            position=position,
+            branch_specs=branch_specs,
+            visited=visited,
+        )
+
+    def _resolve_set_position_from_branches(
+        self,
+        scope_name: str,
+        column_name: str,
+        position: int,
+        branch_specs,
+        visited: Set[Tuple[str, str, str | None]],
+    ) -> ColumnResolutionResult:
+        candidate_results: list[ColumnResolutionResult] = []
         for branch_scope_name, branch_outputs, branch_expression in branch_specs:
             if position >= len(branch_outputs):
                 continue
@@ -136,6 +166,55 @@ class ColumnResolver:
             merged.resolved_kind = 'set_output'
         return merged
 
+    def _extract_set_expression(self, expression):
+        if isinstance(expression, exp.SetOperation):
+            return expression
+        this_expr = getattr(expression, 'this', None)
+        if isinstance(this_expr, exp.SetOperation):
+            return this_expr
+        return None
+
+    def _extract_output_columns_from_expression(self, expression) -> list[str]:
+        set_expression = self._extract_set_expression(expression)
+        if set_expression is not None:
+            return self._extract_output_columns_from_expression(getattr(set_expression, 'left', None))
+        select_items = getattr(expression, 'expressions', []) or []
+        output_columns: list[str] = []
+        for idx, item in enumerate(select_items):
+            alias_name = getattr(item, 'alias_or_name', None)
+            if alias_name:
+                output_columns.append(alias_name)
+            elif isinstance(item, exp.Column):
+                output_columns.append(item.name)
+            else:
+                output_columns.append(f'__col_{idx}')
+        return output_columns
+
+    def _extract_output_expressions_from_expression(self, expression) -> list:
+        set_expression = self._extract_set_expression(expression)
+        if set_expression is not None:
+            return self._extract_output_expressions_from_expression(getattr(set_expression, 'left', None))
+        select_items = getattr(expression, 'expressions', []) or []
+        return [item.this if isinstance(item, exp.Alias) else item for item in select_items]
+
+    def _resolve_set_expression_output(self, set_expression, column_name: str, visited: Set[Tuple[str, str, str | None]]) -> ColumnResolutionResult:
+        output_columns = self._extract_output_columns_from_expression(set_expression)
+        try:
+            position = output_columns.index(column_name)
+        except ValueError:
+            return self._make_unresolved('__set_branch__', exp.column(column_name))
+        branch_specs = (
+            (None, tuple(self._extract_output_expressions_from_expression(getattr(set_expression, 'left', None))), getattr(set_expression, 'left', None)),
+            (None, tuple(self._extract_output_expressions_from_expression(getattr(set_expression, 'right', None))), getattr(set_expression, 'right', None)),
+        )
+        return self._resolve_set_position_from_branches(
+            scope_name='__set_branch__',
+            column_name=column_name,
+            position=position,
+            branch_specs=branch_specs,
+            visited=visited,
+        )
+
     def _resolve_output_position(self, scope_name: str, position: int, visited: Set[Tuple[str, str, str | None]]) -> ColumnResolutionResult:
         set_descriptor = self.scope_registry.get_set_operation(scope_name)
         if set_descriptor is not None:
@@ -166,7 +245,24 @@ class ColumnResolver:
 
         synthetic_alias_name = getattr(expr, 'alias_or_name', None) or (f'__pos_{position}' if position is not None else '__expr')
         synthetic_sql = expr.sql()
-        synthetic_scope_name = scope_name or '__set_branch__'
+
+        # Expressions that come from an anonymous UNION/UNION ALL branch are
+        # implementation details of set-operation resolution, not user-facing
+        # intermediate features. Resolve their upstream source columns directly
+        # and let the parent set_output node represent the UNION output. This
+        # prevents artifacts such as int:__set_branch__:__pos_3 from leaking into
+        # intermediate_features / filter_only_intermediate_features.
+        if scope_name is None:
+            result = ColumnResolutionResult(resolved_kind='source_column')
+            for inner_column in self.expander.collect_columns(expr):
+                inner_result = self._resolve_column_from_branch_expression(branch_expression, inner_column.copy(), visited)
+                result.merge(inner_result)
+            if result.source_nodes or result.intermediate_nodes:
+                result.resolved_kind = 'source_column'
+                return result
+            return self._make_unresolved('__set_branch__', exp.column(synthetic_alias_name))
+
+        synthetic_scope_name = scope_name
         node_id = f"int:{synthetic_scope_name}:{synthetic_alias_name}"
         intermediate = DependencyNode(
             node_id=node_id,
@@ -181,10 +277,7 @@ class ColumnResolver:
             terminal_node_ids=[node_id],
         )
         for inner_column in self.expander.collect_columns(expr):
-            if scope_name is not None:
-                inner_result = self._resolve_column(scope_name, inner_column.copy(), visited)
-            else:
-                inner_result = self._resolve_column_from_branch_expression(branch_expression, inner_column.copy(), visited)
+            inner_result = self._resolve_column(scope_name, inner_column.copy(), visited)
             result.merge(inner_result)
             for terminal_id in inner_result.terminal_node_ids:
                 result.edges.append(
@@ -248,7 +341,7 @@ class ColumnResolver:
             if relation.relation_type == 'physical_table':
                 candidate_results.append(self._make_source(relation.physical_table_name or relation.relation_name, column_name, scope_name))
             elif relation.source_scope_name:
-                candidate_results.append(self._resolve_output_column(relation.source_scope_name, column_name, visited))
+                candidate_results.append(self._resolve_relation_output_column(relation.source_scope_name, column_name, visited))
 
         candidate_results = [result for result in candidate_results if result.resolved_kind != 'unresolved']
         if len(candidate_results) == 1:
@@ -273,7 +366,7 @@ class ColumnResolver:
                     continue
                 source_scope_name = self.scope_registry.find_scope_name_for_obj(source_obj)
                 if source_scope_name:
-                    return self._resolve_output_column(source_scope_name, column_name, visited)
+                    return self._resolve_relation_output_column(source_scope_name, column_name, visited)
                 if isinstance(source_obj, exp.Table):
                     return self._make_source(source_obj.name, column_name, scope_name)
 
@@ -289,6 +382,10 @@ class ColumnResolver:
     def _resolve_column_from_branch_expression(self, branch_expression, column: exp.Column, visited: Set[Tuple[str, str, str | None]]) -> ColumnResolutionResult:
         if branch_expression is None:
             return self._make_unresolved('__set_branch__', column)
+
+        set_expression = self._extract_set_expression(branch_expression)
+        if set_expression is not None and column.table is None:
+            return self._resolve_set_expression_output(set_expression, column.name, visited)
 
         # If column is unqualified, try to resolve by output alias/passthrough within the branch select itself.
         select_items = getattr(branch_expression, 'expressions', []) or []

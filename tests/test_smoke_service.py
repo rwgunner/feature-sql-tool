@@ -41,7 +41,7 @@ def test_smoke_build_sql_from_feature_list() -> None:
     assert "avg_payment_30d" in sql
 
 
-def test_composite_key_build_sql_not_supported_yet() -> None:
+def test_composite_key_build_sql_uses_all_join_keys() -> None:
     root = Path(__file__).resolve().parents[1]
     features = [
         FeatureSpec(
@@ -52,11 +52,12 @@ def test_composite_key_build_sql_not_supported_yet() -> None:
         )
     ]
     tool = FeatureSqlTool()
-    try:
-        tool.build_unified_sql(features)
-    except NotImplementedError:
-        return
-    raise AssertionError('Composite-key unified SQL generation should raise NotImplementedError for 1.1.0')
+    sql = tool.build_unified_sql(features)
+
+    assert "SELECT DISTINCT client_id, payment_id FROM" in sql
+    assert "base.client_id = s1.client_id AND base.payment_id = s1.payment_id" in sql
+    assert "base.client_id," in sql
+    assert "base.payment_id," in sql
 
 
 def test_analyze_features_requires_same_entity_keys() -> None:

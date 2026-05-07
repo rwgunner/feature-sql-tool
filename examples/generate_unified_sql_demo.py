@@ -69,3 +69,7 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+
+
+# Optimized variant (2.0.0)
+# print(tool.build_optimized_unified_sql(client_features))
