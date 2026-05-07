@@ -21,3 +21,8 @@ This package is a practical implementation scaffold with working core logic for:
 ## Notes
 
 The optimizer intentionally uses **safe reuse only**. It merges features only when their normalized query shape matches exactly.
+
+
+## Optimized reusable-stage SQL builder (2.0.0)
+
+Use `FeatureSqlTool.build_optimized_unified_sql(features)` to build unified SQL with reusable base and aggregate CTE stages when possible.
