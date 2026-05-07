@@ -47,6 +47,10 @@ class ColumnResolver:
         visited = set(visited)
         visited.add(key)
 
+        set_descriptor = self.scope_registry.get_set_operation(scope_name)
+        if column.table is None and set_descriptor is not None and column.name in set_descriptor.output_columns:
+            return self._resolve_set_operation_output(scope_name, column.name, visited)
+
         alias_ref = self.scope_registry.find_alias(scope_name, column.name)
         if column.table is None and alias_ref is not None:
             return self._resolve_alias_expression(scope_name, alias_ref, visited)
@@ -65,11 +69,14 @@ class ColumnResolver:
         return self._resolve_output_column(scope_name, column.name, visited)
 
     def _resolve_output_column(self, scope_name: str, column_name: str, visited: Set[Tuple[str, str, str | None]], require_declared_output: bool = False) -> ColumnResolutionResult:
+        set_descriptor = self.scope_registry.get_set_operation(scope_name)
+        if set_descriptor is not None and column_name in set_descriptor.output_columns:
+            return self._resolve_set_operation_output(scope_name, column_name, visited)
+
         alias_ref = self.scope_registry.find_alias(scope_name, column_name)
         if alias_ref is not None:
             return self._resolve_alias_expression(scope_name, alias_ref, visited)
 
-        set_descriptor = self.scope_registry.get_set_operation(scope_name)
         if set_descriptor is not None:
             return self._resolve_set_operation_output(scope_name, column_name, visited)
 
@@ -115,12 +122,27 @@ class ColumnResolver:
             (descriptor.left_scope_name, descriptor.left_output_expressions, descriptor.left_expression),
             (descriptor.right_scope_name, descriptor.right_output_expressions, descriptor.right_expression),
         )
-        return self._resolve_set_position_from_branches(
+        resolved = self._resolve_set_position_from_branches(
             scope_name=scope_name,
             column_name=column_name,
             position=position,
             branch_specs=branch_specs,
             visited=visited,
+        )
+        if resolved.resolved_kind == 'unresolved':
+            return resolved
+        if not self._set_output_should_be_intermediate(
+            column_name=column_name,
+            position=position,
+            branch_specs=branch_specs,
+        ):
+            return resolved
+        return self._wrap_as_set_output_intermediate(
+            scope_name=scope_name,
+            column_name=column_name,
+            position=position,
+            branch_specs=branch_specs,
+            resolved=resolved,
         )
 
     def _resolve_set_position_from_branches(
@@ -165,6 +187,77 @@ class ColumnResolver:
         if merged.resolved_kind == 'source_column' and len(candidate_results) > 1:
             merged.resolved_kind = 'set_output'
         return merged
+
+
+    def _set_output_should_be_intermediate(self, column_name: str, position: int, branch_specs) -> bool:
+        if not column_name or column_name.startswith('__'):
+            return False
+
+        for _branch_scope_name, branch_outputs, _branch_expression in branch_specs:
+            if position >= len(branch_outputs):
+                continue
+            expr = branch_outputs[position]
+            passthrough_column = self.passthrough_detector.extract_passthrough_column(expr)
+            if passthrough_column is None:
+                return True
+            if passthrough_column.name != column_name:
+                return True
+        return False
+
+    def _wrap_as_set_output_intermediate(
+        self,
+        scope_name: str,
+        column_name: str,
+        position: int,
+        branch_specs,
+        resolved: ColumnResolutionResult,
+    ) -> ColumnResolutionResult:
+        node_id = f"int:{scope_name}:{column_name}"
+        expression_sql = self._set_output_expression_sql(column_name, position, branch_specs)
+        intermediate = DependencyNode(
+            node_id=node_id,
+            node_type='intermediate_feature',
+            name=column_name,
+            scope_name=scope_name,
+            expression_sql=expression_sql,
+        )
+        wrapped = ColumnResolutionResult(
+            resolved_kind='intermediate_feature',
+            source_nodes=list(resolved.source_nodes),
+            intermediate_nodes=[*resolved.intermediate_nodes, intermediate],
+            unresolved_nodes=list(resolved.unresolved_nodes),
+            edges=list(resolved.edges),
+            terminal_node_ids=[node_id],
+        )
+        for terminal_id in resolved.terminal_node_ids:
+            wrapped.edges.append(
+                DependencyEdge(
+                    from_node=terminal_id,
+                    to_node=node_id,
+                    dependency_type='set',
+                    clause_type='union',
+                    scope_name=scope_name,
+                    expression_sql=expression_sql,
+                )
+            )
+        return wrapped
+
+    def _set_output_expression_sql(self, column_name: str, position: int, branch_specs) -> str:
+        rendered: list[str] = []
+        for _branch_scope_name, branch_outputs, _branch_expression in branch_specs:
+            if position >= len(branch_outputs):
+                continue
+            try:
+                rendered_sql = branch_outputs[position].sql()
+            except Exception:
+                rendered_sql = str(branch_outputs[position])
+            if rendered_sql not in rendered:
+                rendered.append(rendered_sql)
+        if not rendered:
+            return column_name
+        if len(rendered) == 1:
+            return rendered[0]
+        return 'UNION_OUTPUT ' + column_name + ' := ' + ' | '.join(rendered)
 
     def _extract_set_expression(self, expression):
         if isinstance(expression, exp.SetOperation):

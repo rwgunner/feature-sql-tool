@@ -84,7 +84,9 @@ tests/test_deep_cte_chain_optimizer.py
 tests/test_import.py
 tests/test_nested_union_set_branch_lineage.py
 tests/test_optimized_sql_planner.py
+tests/test_set_output_computed_alias_intermediate.py
 tests/test_smoke_service.py
+tests/test_string_literal_alias_filtering.py
 tests/test_synthetic_literal_alias_filtering.py
 tests/test_union_composite_lineage.py
 tests/test_union_value_lineage_symmetry.py
