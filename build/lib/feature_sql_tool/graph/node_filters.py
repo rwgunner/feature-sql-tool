@@ -8,6 +8,13 @@ _NUMERIC_LITERAL_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$")
 _QUOTED_LITERAL_RE = re.compile(r"^(?:'[^']*'|\"[^\"]*\")$")
 
 
+def _strip_literal_quotes(value: str) -> str:
+    text = str(value or '').strip()
+    if len(text) >= 2 and ((text[0] == text[-1] == "'") or (text[0] == text[-1] == '\"')):
+        return text[1:-1]
+    return text
+
+
 def is_synthetic_intermediate_feature(node: DependencyNode) -> bool:
     """Return True for parser/set-operation artifacts that should not be user-facing.
 
@@ -35,8 +42,14 @@ def is_synthetic_intermediate_feature(node: DependencyNode) -> bool:
     # Literal-only set branch artifacts commonly surface with the literal value
     # itself as the generated alias name, e.g. ``2`` for ``2 AS is_term_deposit``.
     # Keep semantic aliases like ``priority`` even when their expression is ``1``.
-    if expression_sql and name == expression_sql:
-        if _NUMERIC_LITERAL_RE.match(name) or _QUOTED_LITERAL_RE.match(name):
+    if expression_sql:
+        if name == expression_sql and (_NUMERIC_LITERAL_RE.match(name) or _QUOTED_LITERAL_RE.match(name)):
+            return True
+        # String literals may be normalized without quotes in the generated node
+        # name, e.g. expression_sql="'FAILED_PAYMENT'" and name="FAILED_PAYMENT".
+        # Hide these literal-only helper nodes while keeping semantic aliases such
+        # as event_type, priority, is_term_deposit, etc.
+        if _QUOTED_LITERAL_RE.match(expression_sql) and name == _strip_literal_quotes(expression_sql):
             return True
 
     return False

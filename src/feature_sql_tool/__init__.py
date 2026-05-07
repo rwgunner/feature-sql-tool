@@ -4,7 +4,7 @@ from feature_sql_tool.models.set_operation_descriptor import SetOperationDescrip
 from feature_sql_tool.models.vector_build_request import VectorBuildRequest
 from feature_sql_tool.service import FeatureSqlTool
 
-__version__ = "2.6.0"
+__version__ = "2.6.2"
 
 __all__ = [
     "EntityKeySpec",
