@@ -28,6 +28,7 @@ src/feature_sql_tool/graph/canonicalizer.py
 src/feature_sql_tool/graph/dependency_graph.py
 src/feature_sql_tool/graph/filter_only_classifier.py
 src/feature_sql_tool/graph/graph_classifier.py
+src/feature_sql_tool/graph/node_filters.py
 src/feature_sql_tool/graph/unified_graph_builder.py
 src/feature_sql_tool/lineage/__init__.py
 src/feature_sql_tool/lineage/alias_resolver.py
@@ -77,10 +78,15 @@ src/feature_sql_tool/scope/passthrough_detector.py
 src/feature_sql_tool/scope/relation_registry.py
 src/feature_sql_tool/scope/scope_registry.py
 tests/test_complex_cte_lineage.py
+tests/test_computed_alias_not_physical_source.py
 tests/test_cte_sources_fully_physicalized.py
+tests/test_deep_cte_chain_optimizer.py
 tests/test_import.py
+tests/test_nested_union_set_branch_lineage.py
 tests/test_optimized_sql_planner.py
 tests/test_smoke_service.py
+tests/test_synthetic_literal_alias_filtering.py
 tests/test_union_composite_lineage.py
 tests/test_union_value_lineage_symmetry.py
 tests/test_union_value_source_symmetry.py
+tests/test_window_over_union_lineage.py

@@ -46,6 +46,9 @@ class ScopeRegistry:
     def set_root_scope(self, scope_name: str | None) -> None:
         self.root_scope_name = scope_name
 
+    def has_scope(self, scope_name: str | None) -> bool:
+        return bool(scope_name) and scope_name in self._scopes
+
     def get_scope(self, scope_name: str) -> ScopeRecord:
         return self._scopes[scope_name]
 
@@ -66,14 +69,21 @@ class ScopeRegistry:
         self._scopes[scope_name].set_operation = descriptor
 
     def get_set_operation(self, scope_name: str) -> SetOperationDescriptor | None:
-        return self._scopes[scope_name].set_operation
+        scope = self._scopes.get(scope_name)
+        if scope is None:
+            return None
+        return scope.set_operation
 
     def find_alias(self, scope_name: str, alias_name: str) -> Optional[ExpressionRef]:
-        scope = self._scopes[scope_name]
+        scope = self._scopes.get(scope_name)
+        if scope is None:
+            return None
         return scope.aliases.get(alias_name)
 
     def find_relation(self, scope_name: str, relation_name: str) -> Optional[RelationDescriptor]:
-        scope = self._scopes[scope_name]
+        scope = self._scopes.get(scope_name)
+        if scope is None:
+            return None
         if relation_name in scope.relations:
             return scope.relations[relation_name]
         for relation in scope.relations.values():
@@ -82,7 +92,10 @@ class ScopeRegistry:
         return None
 
     def list_relations(self, scope_name: str) -> list[RelationDescriptor]:
-        return list(self._scopes[scope_name].relations.values())
+        scope = self._scopes.get(scope_name)
+        if scope is None:
+            return []
+        return list(scope.relations.values())
 
     def find_scope_name_for_obj(self, obj: Any) -> Optional[str]:
         if obj is None:

@@ -1,19 +1,3 @@
-Metadata-Version: 2.4
-Name: feature-sql-tool
-Version: 2.6.0
-Summary: SQL feature lineage extraction and unified vector SQL planning
-Author-email: Your Name <you@example.com>
-License: MIT
-Requires-Python: >=3.10
-Description-Content-Type: text/markdown
-License-File: LICENSE
-Requires-Dist: sqlglot<28,>=25
-Provides-Extra: dev
-Requires-Dist: build>=1.2.0; extra == "dev"
-Requires-Dist: pytest>=8.0.0; extra == "dev"
-Requires-Dist: twine>=5.0.0; extra == "dev"
-Dynamic: license-file
-
 # feature-sql-tool
 
 Current implementation of `feature-sql-tool` focused on:
